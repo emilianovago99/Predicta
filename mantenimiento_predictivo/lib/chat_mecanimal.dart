@@ -38,7 +38,7 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
       escribiendo = true;
     });
 
-    final url = Uri.parse('http://192.168.1.10:8000/api/chat');
+    final url = Uri.parse('http://10.10.7.161:8000/api/chat');
     try {
       final response = await http.post(
         url,

@@ -15,6 +15,7 @@ class NodoEdge:
         self.maquina_id = maquina_id
         self.limite_temperatura = 60.0
         self.limite_vibracion = 7.0
+        self.limite_humedad = 80.0
         self.url_sensores = "http://127.0.0.1:8000/api/sensores"
         self.url_alertas = "http://127.0.0.1:8000/api/alertas"
         self.url_config = f"http://127.0.0.1:8000/api/maquinas/{maquina_id}/config"
@@ -29,6 +30,7 @@ class NodoEdge:
                 config = respuesta.json()
                 self.limite_temperatura = config['temp_peligro']
                 self.limite_vibracion = config['vib_peligro']
+                self.limite_humedad = config['hum_peligro']
         except Exception:
             pass
 
@@ -36,6 +38,7 @@ class NodoEdge:
         vib = random.uniform(1.0, 1.5)
         volt = random.uniform(119.5, 120.5)
         vel = int(random.uniform(1745, 1755))
+        hum = random.uniform(35.0, 45.0)
 
         if ciclo <= 10:
             self.temp_actual = 42.0 + random.uniform(-0.5, 0.5)
@@ -46,6 +49,7 @@ class NodoEdge:
                 vib = random.uniform(1.8, 3.5)
                 volt = random.uniform(118.0, 119.5)
                 vel = int(random.uniform(1720, 1740))
+                hum = random.uniform(45.0, 55.0)
 
         if ciclo > 18:
             if ciclo <= 28:
@@ -53,6 +57,7 @@ class NodoEdge:
                 vib = random.uniform(6.0, 8.5)
                 volt = random.uniform(95.0, 105.0)
                 vel = int(random.uniform(800, 950))
+                hum = random.uniform(55.0, 75.0)
 
         if ciclo > 28:
             self.temp_actual = self.temp_actual - random.uniform(4.0, 6.0)
@@ -62,8 +67,15 @@ class NodoEdge:
             vib = random.uniform(1.0, 1.5)
             volt = random.uniform(119.5, 120.5)
             vel = int(random.uniform(1745, 1755))
+            hum = random.uniform(35.0, 45.0)
 
-        return {"temperatura": self.temp_actual, "vibracion": vib, "voltaje": volt, "velocidad": vel}
+        return {
+            "temperatura": self.temp_actual, 
+            "vibracion": vib, 
+            "voltaje": volt, 
+            "velocidad": vel,
+            "humedad": hum
+        }
 
     def procesar_localmente(self, datos):
         self.buffer_temperatura.append(datos["temperatura"])
@@ -76,6 +88,8 @@ class NodoEdge:
         if datos["temperatura"] >= self.limite_temperatura:
             es_peligro = True
         if datos["vibracion"] >= self.limite_vibracion:
+            es_peligro = True
+        if datos["humedad"] >= self.limite_humedad:
             es_peligro = True
 
         if len(self.buffer_temperatura) == 3:
@@ -96,11 +110,12 @@ class NodoEdge:
             "voltaje": datos["voltaje"],
             "temperatura": datos["temperatura"],
             "vibracion": datos["vibracion"],
-            "velocidad": datos["velocidad"]
+            "velocidad": datos["velocidad"],
+            "humedad": datos["humedad"]
         }
         
         requests.post(self.url_sensores, json=payload_telemetria)
-        print(f"Telemetria: Temp {datos['temperatura']:.1f}C | Limite Actual: {self.limite_temperatura}°C")
+        print(f"Telemetria: Temp {datos['temperatura']:.1f}C | Humedad {datos['humedad']:.1f}% | Limites Actuales: {self.limite_temperatura}°C / {self.limite_humedad}%")
 
         if es_peligro:
             if self.nivel_alerta < 2:
@@ -116,7 +131,7 @@ class NodoEdge:
         riesgo = 0.0
 
         if tipo == "critico":
-            prompt = f"Temperatura actual {datos['temperatura']:.1f}C supera el limite critico. Da diagnostico de falla en una frase corta."
+            prompt = f"Temperatura actual {datos['temperatura']:.1f}C y Humedad {datos['humedad']:.1f}% superan el limite. Da diagnostico de falla en una frase corta."
             riesgo = 95.0
         if tipo == "predictivo":
             prompt = f"La temperatura esta subiendo anormalmente rapido (actual: {datos['temperatura']:.1f}C). Predice que componente va a fallar en los proximos minutos si esto sigue asi. Responde en una sola frase corta empezando con 'Prediccion:'."

@@ -20,6 +20,12 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   int? empresaSeleccionada;
   int? areaSeleccionada;
 
+  bool medirTemp = true;
+  bool medirVib = true;
+  bool medirVolt = true;
+  bool medirVel = true;
+  bool medirHum = true;
+
   @override
   void initState() {
     super.initState();
@@ -27,7 +33,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> cargarEmpresas() async {
-    final url = Uri.parse('http://192.168.1.10:8000/api/empresas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/empresas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -44,7 +50,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
 
   Future<void> cargarAreas(int idEmpresa) async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/empresas/$idEmpresa/areas',
+      'http://10.10.7.161:8000/api/empresas/$idEmpresa/areas',
     );
     try {
       final response = await http.get(url);
@@ -63,7 +69,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
 
   Future<void> crearEmpresa(String nombreEmpresa) async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/empresas_rapido?nombre=$nombreEmpresa',
+      'http://10.10.7.161:8000/api/empresas_rapido?nombre=$nombreEmpresa',
     );
     try {
       final response = await http.post(url);
@@ -87,7 +93,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   Future<void> crearArea(String nombreArea) async {
     if (empresaSeleccionada == null) return;
 
-    final url = Uri.parse('http://192.168.1.10:8000/api/areas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/areas');
     try {
       final response = await http.post(
         url,
@@ -136,7 +142,8 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
                 if (nuevoNombreController.text.isNotEmpty) {
                   if (tipo == 'Empresa') {
                     crearEmpresa(nuevoNombreController.text);
-                  } else {
+                  }
+                  if (tipo != 'Empresa') {
                     crearArea(nuevoNombreController.text);
                   }
                   Navigator.pop(context);
@@ -170,7 +177,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
       mensaje = '';
     });
 
-    final url = Uri.parse('http://192.168.1.10:8000/api/maquinas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/maquinas');
 
     try {
       final response = await http.post(
@@ -179,6 +186,13 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
         body: json.encode({
           'id_area': areaSeleccionada,
           'nombre': nombreController.text,
+          'id_maquina':
+              'GEN-' + DateTime.now().millisecondsSinceEpoch.toString(),
+          'medir_temp': medirTemp,
+          'medir_vib': medirVib,
+          'medir_volt': medirVolt,
+          'medir_vel': medirVel,
+          'medir_hum': medirHum,
         }),
       );
 
@@ -187,7 +201,9 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
           mensaje = 'Hardware enlazado exitosamente';
           nombreController.clear();
         });
-      } else {
+      }
+
+      if (response.statusCode != 200) {
         setState(() {
           mensaje = 'Error al registrar la máquina';
         });
@@ -340,6 +356,56 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
                       border: OutlineInputBorder(),
                       prefixIcon: Icon(Icons.precision_manufacturing),
                     ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Sensores Activos Iniciales',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Temperatura'),
+                    value: medirTemp,
+                    onChanged: (bool valor) {
+                      setState(() {
+                        medirTemp = valor;
+                      });
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Vibración'),
+                    value: medirVib,
+                    onChanged: (bool valor) {
+                      setState(() {
+                        medirVib = valor;
+                      });
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Voltaje'),
+                    value: medirVolt,
+                    onChanged: (bool valor) {
+                      setState(() {
+                        medirVolt = valor;
+                      });
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Velocidad'),
+                    value: medirVel,
+                    onChanged: (bool valor) {
+                      setState(() {
+                        medirVel = valor;
+                      });
+                    },
+                  ),
+                  SwitchListTile(
+                    title: const Text('Humedad'),
+                    value: medirHum,
+                    onChanged: (bool valor) {
+                      setState(() {
+                        medirHum = valor;
+                      });
+                    },
                   ),
                   const SizedBox(height: 32),
                   construirBoton(),

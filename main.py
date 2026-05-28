@@ -68,6 +68,7 @@ class Telemetria(BaseModel):
     temperatura: float
     vibracion: float
     velocidad: int
+    humedad: float
 
 class Alerta(BaseModel):
     maquina_id: str
@@ -78,6 +79,11 @@ class MaquinaRegistro(BaseModel):
     id_area: int
     nombre: str
     id_maquina: str
+    medir_temp: bool
+    medir_vib: bool
+    medir_volt: bool
+    medir_vel: bool
+    medir_hum: bool
 
 class AreaRegistro(BaseModel):
     id_empresa: int
@@ -94,6 +100,13 @@ class ConfiguracionMaquina(BaseModel):
     volt_peligro: float
     vel_alerta: int
     vel_peligro: int
+    hum_alerta: float
+    hum_peligro: float
+    medir_temp: bool
+    medir_vib: bool
+    medir_volt: bool
+    medir_vel: bool
+    medir_hum: bool
 
 class ChatRequest(BaseModel):
     mensaje: str
@@ -155,24 +168,27 @@ def registrar_telemetria(datos: Telemetria):
     conexion = conectar_db()
     cursor = conexion.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT temp_alerta, vib_alerta FROM Maquina WHERE id_maquina = %s", (datos.maquina_id,))
+        cursor.execute("SELECT temp_alerta, vib_alerta, hum_alerta FROM Maquina WHERE id_maquina = %s", (datos.maquina_id,))
         limites = cursor.fetchone()
         
         t_limite = 50.0
         v_limite = 4.0
+        h_limite = 60.0
         
         if limites:
             t_limite = limites['temp_alerta']
             v_limite = limites['vib_alerta']
+            h_limite = limites['hum_alerta']
             
         cursor.execute(
-            "INSERT INTO SensorData (id_maquina, temperatura, vibracion, voltaje, velocidad) VALUES (%s, %s, %s, %s, %s)",
-            (datos.maquina_id, datos.temperatura, datos.vibracion, datos.voltaje, datos.velocidad)
+            "INSERT INTO SensorData (id_maquina, temperatura, vibracion, voltaje, velocidad, humedad) VALUES (%s, %s, %s, %s, %s, %s)",
+            (datos.maquina_id, datos.temperatura, datos.vibracion, datos.voltaje, datos.velocidad, datos.humedad)
         )
         
         if datos.temperatura < t_limite:
             if datos.vibracion < v_limite:
-                cursor.execute("UPDATE Maquina SET estado = 'optimo' WHERE id_maquina = %s", (datos.maquina_id,))
+                if datos.humedad < h_limite:
+                    cursor.execute("UPDATE Maquina SET estado = 'optimo' WHERE id_maquina = %s", (datos.maquina_id,))
                 
         conexion.commit()
         return {"status": "Datos guardados"}
@@ -222,13 +238,13 @@ def obtener_datos_maquina(id_maquina: str):
     conexion = conectar_db()
     cursor = conexion.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT nombre, estado, temp_alerta, temp_peligro, vib_alerta, vib_peligro, volt_alerta, volt_peligro, vel_alerta, vel_peligro FROM Maquina WHERE id_maquina = %s", (id_maquina,))
+        cursor.execute("SELECT nombre, estado, temp_alerta, temp_peligro, vib_alerta, vib_peligro, volt_alerta, volt_peligro, vel_alerta, vel_peligro, hum_alerta, hum_peligro, medir_temp, medir_vib, medir_volt, medir_vel, medir_hum FROM Maquina WHERE id_maquina = %s", (id_maquina,))
         maquina = cursor.fetchone()
         
         if not maquina:
             raise HTTPException(status_code=404, detail="Maquina no encontrada")
             
-        cursor.execute("SELECT temperatura, vibracion, voltaje, velocidad FROM SensorData WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 50", (id_maquina,))
+        cursor.execute("SELECT temperatura, vibracion, voltaje, velocidad, humedad FROM SensorData WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 50", (id_maquina,))
         historial = cursor.fetchall()
         
         cursor.execute("SELECT diagnostico, fecha FROM Alertas WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 1", (id_maquina,))
@@ -252,7 +268,7 @@ def obtener_configuracion_maquina(id_maquina: str):
     conexion = conectar_db()
     cursor = conexion.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT nombre, id_area, temp_alerta, temp_peligro, vib_alerta, vib_peligro, volt_alerta, volt_peligro, vel_alerta, vel_peligro FROM Maquina WHERE id_maquina = %s", (id_maquina,))
+        cursor.execute("SELECT nombre, id_area, temp_alerta, temp_peligro, vib_alerta, vib_peligro, volt_alerta, volt_peligro, vel_alerta, vel_peligro, hum_alerta, hum_peligro, medir_temp, medir_vib, medir_volt, medir_vel, medir_hum FROM Maquina WHERE id_maquina = %s", (id_maquina,))
         config = cursor.fetchone()
         
         if not config:
@@ -273,8 +289,8 @@ def actualizar_configuracion_maquina(id_maquina: str, config: ConfiguracionMaqui
     cursor = conexion.cursor()
     try:
         cursor.execute(
-            "UPDATE Maquina SET nombre = %s, id_area = %s, temp_alerta = %s, temp_peligro = %s, vib_alerta = %s, vib_peligro = %s, volt_alerta = %s, volt_peligro = %s, vel_alerta = %s, vel_peligro = %s WHERE id_maquina = %s",
-            (config.nombre, config.id_area, config.temp_alerta, config.temp_peligro, config.vib_alerta, config.vib_peligro, config.volt_alerta, config.volt_peligro, config.vel_alerta, config.vel_peligro, id_maquina)
+            "UPDATE Maquina SET nombre = %s, id_area = %s, temp_alerta = %s, temp_peligro = %s, vib_alerta = %s, vib_peligro = %s, volt_alerta = %s, volt_peligro = %s, vel_alerta = %s, vel_peligro = %s, hum_alerta = %s, hum_peligro = %s, medir_temp = %s, medir_vib = %s, medir_volt = %s, medir_vel = %s, medir_hum = %s WHERE id_maquina = %s",
+            (config.nombre, config.id_area, config.temp_alerta, config.temp_peligro, config.vib_alerta, config.vib_peligro, config.volt_alerta, config.volt_peligro, config.vel_alerta, config.vel_peligro, config.hum_alerta, config.hum_peligro, config.medir_temp, config.medir_vib, config.medir_volt, config.medir_vel, config.medir_hum, id_maquina)
         )
         conexion.commit()
         return {"status": "Configuracion actualizada exitosamente"}
@@ -368,8 +384,8 @@ def registrar_maquina(datos: MaquinaRegistro):
     cursor = conexion.cursor()
     try:
         cursor.execute(
-            "INSERT INTO Maquina (id_maquina, id_area, nombre, estado) VALUES (%s, %s, %s, 'optimo')",
-            (datos.id_maquina, datos.id_area, datos.nombre)
+            "INSERT INTO Maquina (id_maquina, id_area, nombre, estado, medir_temp, medir_vib, medir_volt, medir_vel, medir_hum) VALUES (%s, %s, %s, 'optimo', %s, %s, %s, %s, %s)",
+            (datos.id_maquina, datos.id_area, datos.nombre, datos.medir_temp, datos.medir_vib, datos.medir_volt, datos.medir_vel, datos.medir_hum)
         )
         conexion.commit()
         return {"id_maquina": datos.id_maquina, "status": "Maquina registrada exitosamente"}
@@ -391,12 +407,12 @@ def asistente_mecanimal(request: ChatRequest):
         if not maquina:
             raise HTTPException(status_code=404, detail="Maquina no encontrada")
             
-        cursor.execute("SELECT temperatura, vibracion, voltaje, velocidad FROM SensorData WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 1", (request.id_maquina,))
+        cursor.execute("SELECT temperatura, vibracion, voltaje, velocidad, humedad FROM SensorData WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 1", (request.id_maquina,))
         datos = cursor.fetchone()
         
         contexto = "No hay datos recientes de los sensores."
         if datos:
-            contexto = f"Temperatura: {datos['temperatura']:.1f}C, Vibracion: {datos['vibracion']:.1f}mm/s, Voltaje: {datos['voltaje']:.1f}V, Velocidad: {datos['velocidad']}RPM. Estado general de la maquina: {maquina['estado']}."
+            contexto = f"Temperatura: {datos['temperatura']:.1f}C, Vibracion: {datos['vibracion']:.1f}mm/s, Voltaje: {datos['voltaje']:.1f}V, Velocidad: {datos['velocidad']}RPM, Humedad: {datos['humedad']:.1f}%. Estado general de la maquina: {maquina['estado']}."
             
         prompt = f"Eres un 'Mecanimal', una mascota robotica super inteligente que asiste a los ingenieros de la fabrica. Eres amigable, directo y usas emojis de animales mecanicos o herramientas. El usuario te pregunta: '{request.mensaje}'. Responde usando estos datos en tiempo real de la maquina: {contexto}. Da una respuesta util y de maximo dos oraciones breves."
         
@@ -406,7 +422,7 @@ def asistente_mecanimal(request: ChatRequest):
             respuesta_texto = respuesta.text
         except Exception:
             if datos:
-                respuesta_texto = f"🐾🤖 ¡Bzzz! Mis circuitos de IA están tomando un respiro (Modo Respaldo). Te informo rápido: el motor está en estado '{maquina['estado']}' con una temperatura de {datos['temperatura']:.1f}°C."
+                respuesta_texto = f"🐾🤖 ¡Bzzz! Mis circuitos de IA están tomando un respiro (Modo Respaldo). Te informo rápido: el motor está en estado '{maquina['estado']}' con una temperatura de {datos['temperatura']:.1f}°C y una humedad de {datos['humedad']:.1f}%."
             if not datos:
                 respuesta_texto = "🐾🤖 ¡Bzzz! Mis circuitos de IA están tomando un respiro (Modo Respaldo). No tengo lecturas de sensores disponibles."
         

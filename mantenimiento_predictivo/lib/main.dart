@@ -115,7 +115,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
       cargando = true;
     });
 
-    final url = Uri.parse('http://192.168.1.10:8000/api/login');
+    final url = Uri.parse('http://10.10.7.161:8000/api/login');
     try {
       final response = await http.post(
         url,
@@ -284,7 +284,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> cargarEmpresas() async {
-    final url = Uri.parse('http://192.168.1.10:8000/api/empresas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/empresas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -390,7 +390,7 @@ class _PantallaCrearEmpresaState extends State<PantallaCrearEmpresa> {
     }
 
     final urlEmpresa = Uri.parse(
-      'http://192.168.1.10:8000/api/empresas_rapido?nombre=${nombreEmpresaCtrl.text}',
+      'http://10.10.7.161:8000/api/empresas_rapido?nombre=${nombreEmpresaCtrl.text}',
     );
 
     try {
@@ -400,7 +400,7 @@ class _PantallaCrearEmpresaState extends State<PantallaCrearEmpresa> {
         final dataEmpresa = json.decode(responseEmpresa.body);
         final idEmpresaGenerada = dataEmpresa['id_empresa'];
 
-        final urlUsuario = Uri.parse('http://192.168.1.10:8000/api/usuarios');
+        final urlUsuario = Uri.parse('http://10.10.7.161:8000/api/usuarios');
         final responseUsuario = await http.post(
           urlUsuario,
           headers: {'Content-Type': 'application/json'},
@@ -537,7 +537,7 @@ class _PantallaAreasState extends State<PantallaAreas> {
 
   Future<void> cargarAreas() async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/empresas/${widget.idEmpresa}/areas',
+      'http://10.10.7.161:8000/api/empresas/${widget.idEmpresa}/areas',
     );
     try {
       final response = await http.get(url);
@@ -552,7 +552,24 @@ class _PantallaAreasState extends State<PantallaAreas> {
   }
 
   Widget? construirBotonAgregar(BuildContext context) {
-    if (widget.rol == 'jefe' || widget.rol == 'instalador') {
+    if (widget.rol == 'jefe') {
+      return FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) =>
+                  PantallaCrearArea(idEmpresa: widget.idEmpresa),
+            ),
+          ).then((_) => cargarAreas());
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('Nueva Área'),
+        backgroundColor: Colors.blueGrey.shade800,
+        foregroundColor: Colors.white,
+      );
+    }
+    if (widget.rol == 'instalador') {
       return FloatingActionButton.extended(
         onPressed: () {
           Navigator.push(
@@ -677,7 +694,7 @@ class PantallaCrearParticipante extends StatelessWidget {
     if (emailCtrl.text.isEmpty) {
       return;
     }
-    final url = Uri.parse('http://192.168.1.10:8000/api/usuarios');
+    final url = Uri.parse('http://10.10.7.161:8000/api/usuarios');
     try {
       final response = await http.post(
         url,
@@ -771,7 +788,7 @@ class PantallaCrearArea extends StatelessWidget {
   PantallaCrearArea({super.key, required this.idEmpresa});
 
   Future<void> guardarArea(BuildContext context) async {
-    final url = Uri.parse('http://192.168.1.10:8000/api/areas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/areas');
     try {
       final response = await http.post(
         url,
@@ -862,7 +879,7 @@ class _PantallaMaquinasState extends State<PantallaMaquinas> {
 
   Future<void> cargarMaquinas() async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/areas/${widget.idArea}/maquinas',
+      'http://10.10.7.161:8000/api/areas/${widget.idArea}/maquinas',
     );
     try {
       final response = await http.get(url);
@@ -877,7 +894,23 @@ class _PantallaMaquinasState extends State<PantallaMaquinas> {
   }
 
   Widget? construirBotonEdicion(BuildContext context, String idMaquina) {
-    if (widget.rol == 'jefe' || widget.rol == 'instalador') {
+    if (widget.rol == 'jefe') {
+      return IconButton(
+        icon: const Icon(Icons.settings, color: Colors.teal),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PantallaConfiguracion(
+                idMaquina: idMaquina,
+                idEmpresa: widget.idEmpresa,
+              ),
+            ),
+          ).then((_) => cargarMaquinas());
+        },
+      );
+    }
+    if (widget.rol == 'instalador') {
       return IconButton(
         icon: const Icon(Icons.settings, color: Colors.teal),
         onPressed: () {
@@ -976,23 +1009,41 @@ class _PantallaMaquinasState extends State<PantallaMaquinas> {
   }
 }
 
-class PantallaVincularMaquina extends StatelessWidget {
+class PantallaVincularMaquina extends StatefulWidget {
   final int idArea;
+
+  const PantallaVincularMaquina({super.key, required this.idArea});
+
+  @override
+  State<PantallaVincularMaquina> createState() =>
+      _PantallaVincularMaquinaState();
+}
+
+class _PantallaVincularMaquinaState extends State<PantallaVincularMaquina> {
   final TextEditingController idMaquinaCtrl = TextEditingController();
   final TextEditingController nombreCtrl = TextEditingController();
 
-  PantallaVincularMaquina({super.key, required this.idArea});
+  bool medirTemp = true;
+  bool medirVib = true;
+  bool medirVolt = true;
+  bool medirVel = true;
+  bool medirHum = true;
 
   Future<void> guardarMaquina(BuildContext context) async {
-    final url = Uri.parse('http://192.168.1.10:8000/api/maquinas');
+    final url = Uri.parse('http://10.10.7.161:8000/api/maquinas');
     try {
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'id_area': idArea,
+          'id_area': widget.idArea,
           'id_maquina': idMaquinaCtrl.text,
           'nombre': nombreCtrl.text,
+          'medir_temp': medirTemp,
+          'medir_vib': medirVib,
+          'medir_volt': medirVolt,
+          'medir_vel': medirVel,
+          'medir_hum': medirHum,
         }),
       );
       if (response.statusCode == 200) {
@@ -1016,7 +1067,7 @@ class PantallaVincularMaquina extends StatelessWidget {
         backgroundColor: Colors.teal.shade800,
         foregroundColor: Colors.white,
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
@@ -1034,6 +1085,56 @@ class PantallaVincularMaquina extends StatelessWidget {
                 labelText: 'Nombre Descriptivo (ej. Banda Transportadora)',
                 border: OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 30),
+            const Text(
+              'Sensores Activos',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            SwitchListTile(
+              title: const Text('Temperatura'),
+              value: medirTemp,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirTemp = valor;
+                });
+              },
+            ),
+            SwitchListTile(
+              title: const Text('Vibración'),
+              value: medirVib,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirVib = valor;
+                });
+              },
+            ),
+            SwitchListTile(
+              title: const Text('Voltaje'),
+              value: medirVolt,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirVolt = valor;
+                });
+              },
+            ),
+            SwitchListTile(
+              title: const Text('Velocidad'),
+              value: medirVel,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirVel = valor;
+                });
+              },
+            ),
+            SwitchListTile(
+              title: const Text('Humedad'),
+              value: medirHum,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirHum = valor;
+                });
+              },
             ),
             const SizedBox(height: 30),
             SizedBox(
@@ -1079,9 +1180,17 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
   TextEditingController voltPeligroCtrl = TextEditingController();
   TextEditingController velAlertaCtrl = TextEditingController();
   TextEditingController velPeligroCtrl = TextEditingController();
+  TextEditingController humAlertaCtrl = TextEditingController();
+  TextEditingController humPeligroCtrl = TextEditingController();
 
   int? idAreaActual;
   List<dynamic> areasDisponibles = [];
+
+  bool medirTemp = true;
+  bool medirVib = true;
+  bool medirVolt = true;
+  bool medirVel = true;
+  bool medirHum = true;
 
   @override
   void initState() {
@@ -1091,7 +1200,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
 
   Future<void> cargarAreas() async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/empresas/${widget.idEmpresa}/areas',
+      'http://10.10.7.161:8000/api/empresas/${widget.idEmpresa}/areas',
     );
     try {
       final response = await http.get(url);
@@ -1107,7 +1216,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
 
   Future<void> cargarConfiguracion() async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/maquinas/${widget.idMaquina}/config',
+      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/config',
     );
     try {
       final response = await http.get(url);
@@ -1124,6 +1233,39 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
           voltPeligroCtrl.text = data['volt_peligro'].toString();
           velAlertaCtrl.text = data['vel_alerta'].toString();
           velPeligroCtrl.text = data['vel_peligro'].toString();
+          humAlertaCtrl.text = data['hum_alerta'].toString();
+          humPeligroCtrl.text = data['hum_peligro'].toString();
+
+          if (data['medir_temp'] == 1) {
+            medirTemp = true;
+          }
+          if (data['medir_temp'] == 0) {
+            medirTemp = false;
+          }
+          if (data['medir_vib'] == 1) {
+            medirVib = true;
+          }
+          if (data['medir_vib'] == 0) {
+            medirVib = false;
+          }
+          if (data['medir_volt'] == 1) {
+            medirVolt = true;
+          }
+          if (data['medir_volt'] == 0) {
+            medirVolt = false;
+          }
+          if (data['medir_vel'] == 1) {
+            medirVel = true;
+          }
+          if (data['medir_vel'] == 0) {
+            medirVel = false;
+          }
+          if (data['medir_hum'] == 1) {
+            medirHum = true;
+          }
+          if (data['medir_hum'] == 0) {
+            medirHum = false;
+          }
         });
       }
     } catch (e) {
@@ -1136,7 +1278,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
       return;
     }
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/maquinas/${widget.idMaquina}/config',
+      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/config',
     );
     try {
       await http.put(
@@ -1153,6 +1295,13 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
           'volt_peligro': double.parse(voltPeligroCtrl.text),
           'vel_alerta': int.parse(velAlertaCtrl.text),
           'vel_peligro': int.parse(velPeligroCtrl.text),
+          'hum_alerta': double.parse(humAlertaCtrl.text),
+          'hum_peligro': double.parse(humPeligroCtrl.text),
+          'medir_temp': medirTemp,
+          'medir_vib': medirVib,
+          'medir_volt': medirVolt,
+          'medir_vel': medirVel,
+          'medir_hum': medirHum,
         }),
       );
       Navigator.pop(context);
@@ -1171,6 +1320,45 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
       );
     }
     return items;
+  }
+
+  Widget construirSeccionLimite(
+    String titulo,
+    TextEditingController ctrlAlerta,
+    TextEditingController ctrlPeligro,
+    bool activo,
+    ValueChanged<bool> onChangeSwitch,
+  ) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(titulo, style: const TextStyle(fontWeight: FontWeight.bold)),
+            Switch(value: activo, onChanged: onChangeSwitch),
+          ],
+        ),
+        if (activo)
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: ctrlAlerta,
+                  decoration: const InputDecoration(labelText: 'Alerta'),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: TextField(
+                  controller: ctrlPeligro,
+                  decoration: const InputDecoration(labelText: 'Peligro'),
+                ),
+              ),
+            ],
+          ),
+        const SizedBox(height: 20),
+      ],
+    );
   }
 
   @override
@@ -1219,92 +1407,60 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
                 },
               ),
             const SizedBox(height: 32),
-            const Text(
+            construirSeccionLimite(
               'Límites de Temperatura (°C)',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              tAlertaCtrl,
+              tPeligroCtrl,
+              medirTemp,
+              (bool val) {
+                setState(() {
+                  medirTemp = val;
+                });
+              },
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: tAlertaCtrl,
-                    decoration: const InputDecoration(labelText: 'Alerta'),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: tPeligroCtrl,
-                    decoration: const InputDecoration(labelText: 'Peligro'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
+            construirSeccionLimite(
               'Límites de Vibración (mm/s)',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              vibAlertaCtrl,
+              vibPeligroCtrl,
+              medirVib,
+              (bool val) {
+                setState(() {
+                  medirVib = val;
+                });
+              },
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: vibAlertaCtrl,
-                    decoration: const InputDecoration(labelText: 'Alerta'),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: vibPeligroCtrl,
-                    decoration: const InputDecoration(labelText: 'Peligro'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
+            construirSeccionLimite(
               'Límites de Voltaje (V)',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              voltAlertaCtrl,
+              voltPeligroCtrl,
+              medirVolt,
+              (bool val) {
+                setState(() {
+                  medirVolt = val;
+                });
+              },
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: voltAlertaCtrl,
-                    decoration: const InputDecoration(labelText: 'Alerta'),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: voltPeligroCtrl,
-                    decoration: const InputDecoration(labelText: 'Peligro'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
+            construirSeccionLimite(
               'Límites de Velocidad (RPM)',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              velAlertaCtrl,
+              velPeligroCtrl,
+              medirVel,
+              (bool val) {
+                setState(() {
+                  medirVel = val;
+                });
+              },
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: velAlertaCtrl,
-                    decoration: const InputDecoration(labelText: 'Alerta'),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: velPeligroCtrl,
-                    decoration: const InputDecoration(labelText: 'Peligro'),
-                  ),
-                ),
-              ],
+            construirSeccionLimite(
+              'Límites de Humedad (%)',
+              humAlertaCtrl,
+              humPeligroCtrl,
+              medirHum,
+              (bool val) {
+                setState(() {
+                  medirHum = val;
+                });
+              },
             ),
             const SizedBox(height: 40),
             SizedBox(

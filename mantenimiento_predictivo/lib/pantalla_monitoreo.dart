@@ -30,6 +30,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   double vibracion = 0.0;
   int velocidad = 0;
   double voltaje = 0.0;
+  double humedad = 0.0;
 
   double tAlerta = 50.0;
   double tPeligro = 60.0;
@@ -39,6 +40,14 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   double voltPeligro = 130.0;
   int velAlerta = 800;
   int velPeligro = 1500;
+  double humAlerta = 60.0;
+  double humPeligro = 80.0;
+
+  bool medirTemp = true;
+  bool medirVib = true;
+  bool medirVolt = true;
+  bool medirVel = true;
+  bool medirHum = true;
 
   String metricaActiva = 'Temperatura';
   String ultimaAlertaProcesada = '';
@@ -47,6 +56,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   List<PuntoGrafica> histVib = [];
   List<PuntoGrafica> histVel = [];
   List<PuntoGrafica> histVolt = [];
+  List<PuntoGrafica> histHum = [];
 
   List<PuntoGrafica> datosGraficaActual = [];
 
@@ -115,7 +125,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
 
   Future<void> obtenerDatosMaquina() async {
     final url = Uri.parse(
-      'http://192.168.1.10:8000/api/maquinas/${widget.idMaquina}/datos',
+      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/datos',
     );
 
     try {
@@ -136,6 +146,39 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           voltPeligro = data['maquina']['volt_peligro'].toDouble();
           velAlerta = data['maquina']['vel_alerta'].toInt();
           velPeligro = data['maquina']['vel_peligro'].toInt();
+          humAlerta = data['maquina']['hum_alerta'].toDouble();
+          humPeligro = data['maquina']['hum_peligro'].toDouble();
+
+          if (data['maquina']['medir_temp'] == 1) {
+            medirTemp = true;
+          }
+          if (data['maquina']['medir_temp'] == 0) {
+            medirTemp = false;
+          }
+          if (data['maquina']['medir_vib'] == 1) {
+            medirVib = true;
+          }
+          if (data['maquina']['medir_vib'] == 0) {
+            medirVib = false;
+          }
+          if (data['maquina']['medir_volt'] == 1) {
+            medirVolt = true;
+          }
+          if (data['maquina']['medir_volt'] == 0) {
+            medirVolt = false;
+          }
+          if (data['maquina']['medir_vel'] == 1) {
+            medirVel = true;
+          }
+          if (data['maquina']['medir_vel'] == 0) {
+            medirVel = false;
+          }
+          if (data['maquina']['medir_hum'] == 1) {
+            medirHum = true;
+          }
+          if (data['maquina']['medir_hum'] == 0) {
+            medirHum = false;
+          }
 
           if (data['ultima_alerta'] != null) {
             diagnostico = data['ultima_alerta']['diagnostico'];
@@ -157,11 +200,13 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
               vibracion = listaRaw[0]['vibracion'].toDouble();
               velocidad = listaRaw[0]['velocidad'].toInt();
               voltaje = listaRaw[0]['voltaje'].toDouble();
+              humedad = listaRaw[0]['humedad'].toDouble();
 
               histTemp.clear();
               histVib.clear();
               histVel.clear();
               histVolt.clear();
+              histHum.clear();
 
               List<dynamic> listaCronologica = listaRaw.reversed.toList();
               int contador = 0;
@@ -178,6 +223,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                 );
                 histVolt.add(
                   PuntoGrafica(contador, lectura['voltaje'].toDouble()),
+                );
+                histHum.add(
+                  PuntoGrafica(contador, lectura['humedad'].toDouble()),
                 );
                 contador++;
               }
@@ -206,6 +254,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     }
     if (metricaActiva == 'Voltaje') {
       datosGraficaActual = histVolt;
+    }
+    if (metricaActiva == 'Humedad') {
+      datosGraficaActual = histHum;
     }
   }
 
@@ -243,6 +294,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     if (metricaActiva == 'Velocidad') {
       return Colors.green;
     }
+    if (metricaActiva == 'Humedad') {
+      return Colors.blue;
+    }
     return Colors.purple;
   }
 
@@ -255,6 +309,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     }
     if (metricaActiva == 'Velocidad') {
       return 'RPM';
+    }
+    if (metricaActiva == 'Humedad') {
+      return '%';
     }
     return 'V';
   }
@@ -269,40 +326,49 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     if (metricaActiva == 'Velocidad') {
       return velPeligro.toDouble();
     }
+    if (metricaActiva == 'Humedad') {
+      return humPeligro;
+    }
     return voltPeligro;
   }
 
   List<Widget> construirBotonesMetricas() {
     List<Widget> chips = [];
-    List<String> opciones = [
-      'Temperatura',
-      'Vibración',
-      'Velocidad',
-      'Voltaje',
-    ];
-
-    for (String opcion in opciones) {
-      bool seleccionado = false;
-      if (metricaActiva == opcion) {
-        seleccionado = true;
-      }
-
-      chips.add(
-        ChoiceChip(
-          label: Text(opcion),
-          selected: seleccionado,
-          onSelected: (bool valor) {
-            if (valor == true) {
-              setState(() {
-                metricaActiva = opcion;
-                actualizarDatosGrafica();
-              });
-            }
-          },
-        ),
-      );
+    if (medirTemp) {
+      chips.add(crearChoiceChip('Temperatura'));
+    }
+    if (medirVib) {
+      chips.add(crearChoiceChip('Vibración'));
+    }
+    if (medirVel) {
+      chips.add(crearChoiceChip('Velocidad'));
+    }
+    if (medirVolt) {
+      chips.add(crearChoiceChip('Voltaje'));
+    }
+    if (medirHum) {
+      chips.add(crearChoiceChip('Humedad'));
     }
     return chips;
+  }
+
+  Widget crearChoiceChip(String opcion) {
+    bool seleccionado = false;
+    if (metricaActiva == opcion) {
+      seleccionado = true;
+    }
+    return ChoiceChip(
+      label: Text(opcion),
+      selected: seleccionado,
+      onSelected: (bool valor) {
+        if (valor == true) {
+          setState(() {
+            metricaActiva = opcion;
+            actualizarDatosGrafica();
+          });
+        }
+      },
+    );
   }
 
   @override
@@ -398,254 +464,325 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
               runSpacing: 16.0,
               alignment: WrapAlignment.center,
               children: [
-                SizedBox(
-                  width: anchoTarjeta,
-                  height: 250,
-                  child: Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Velocidad (RPM)',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                if (medirVel)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Velocidad (RPM)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
-                          Expanded(
-                            child: SfRadialGauge(
-                              axes: <RadialAxis>[
-                                RadialAxis(
-                                  minimum: 0,
-                                  maximum: maxVel,
-                                  ranges: <GaugeRange>[
-                                    GaugeRange(
-                                      startValue: 0,
-                                      endValue: velAlerta.toDouble(),
-                                      color: Colors.green,
-                                    ),
-                                    GaugeRange(
-                                      startValue: velAlerta.toDouble(),
-                                      endValue: velPeligro.toDouble(),
-                                      color: Colors.orange,
-                                    ),
-                                    GaugeRange(
-                                      startValue: velPeligro.toDouble(),
-                                      endValue: maxVel,
-                                      color: Colors.red,
-                                    ),
-                                  ],
-                                  pointers: <GaugePointer>[
-                                    NeedlePointer(
-                                      value: velocidad.toDouble(),
-                                      enableAnimation: true,
-                                    ),
-                                  ],
-                                  annotations: <GaugeAnnotation>[
-                                    GaugeAnnotation(
-                                      widget: Text(
-                                        velocidad.toString(),
-                                        style: const TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                            Expanded(
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: maxVel,
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: velAlerta.toDouble(),
+                                        color: Colors.green,
                                       ),
-                                      angle: 90,
-                                      positionFactor: 0.5,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: anchoTarjeta,
-                  height: 250,
-                  child: Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Voltaje (V)',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Expanded(
-                            child: SfRadialGauge(
-                              axes: <RadialAxis>[
-                                RadialAxis(
-                                  minimum: 0,
-                                  maximum: maxVolt,
-                                  startAngle: 180,
-                                  endAngle: 0,
-                                  canScaleToFit: true,
-                                  pointers: <GaugePointer>[
-                                    NeedlePointer(
-                                      value: voltaje,
-                                      enableAnimation: true,
-                                    ),
-                                  ],
-                                  ranges: <GaugeRange>[
-                                    GaugeRange(
-                                      startValue: 0,
-                                      endValue: voltAlerta,
-                                      color: Colors.green,
-                                    ),
-                                    GaugeRange(
-                                      startValue: voltAlerta,
-                                      endValue: voltPeligro,
-                                      color: Colors.orange,
-                                    ),
-                                    GaugeRange(
-                                      startValue: voltPeligro,
-                                      endValue: maxVolt,
-                                      color: Colors.red,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            '${voltaje.toStringAsFixed(1)} V',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: anchoTarjeta,
-                  height: 250,
-                  child: Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Temperatura (°C)',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Expanded(
-                            child: SfLinearGauge(
-                              minimum: 0,
-                              maximum: maxTemp,
-                              orientation: LinearGaugeOrientation.vertical,
-                              ranges: [
-                                LinearGaugeRange(
-                                  startValue: 0,
-                                  endValue: tAlerta,
-                                  color: Colors.green,
-                                ),
-                                LinearGaugeRange(
-                                  startValue: tAlerta,
-                                  endValue: tPeligro,
-                                  color: Colors.orange,
-                                ),
-                                LinearGaugeRange(
-                                  startValue: tPeligro,
-                                  endValue: maxTemp,
-                                  color: Colors.red,
-                                ),
-                              ],
-                              barPointers: [
-                                LinearBarPointer(
-                                  value: temperatura,
-                                  color: obtenerColorIndicador(
-                                    temperatura,
-                                    tAlerta,
-                                    tPeligro,
+                                      GaugeRange(
+                                        startValue: velAlerta.toDouble(),
+                                        endValue: velPeligro.toDouble(),
+                                        color: Colors.orange,
+                                      ),
+                                      GaugeRange(
+                                        startValue: velPeligro.toDouble(),
+                                        endValue: maxVel,
+                                        color: Colors.red,
+                                      ),
+                                    ],
+                                    pointers: <GaugePointer>[
+                                      NeedlePointer(
+                                        value: velocidad.toDouble(),
+                                        enableAnimation: true,
+                                      ),
+                                    ],
+                                    annotations: <GaugeAnnotation>[
+                                      GaugeAnnotation(
+                                        widget: Text(
+                                          velocidad.toString(),
+                                          style: const TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        angle: 90,
+                                        positionFactor: 0.5,
+                                      ),
+                                    ],
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          Text(
-                            '${temperatura.toStringAsFixed(1)} °C',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-                SizedBox(
-                  width: anchoTarjeta,
-                  height: 250,
-                  child: Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Vibración (mm/s)',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                if (medirVolt)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Voltaje (V)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
-                          Expanded(
-                            child: SfRadialGauge(
-                              axes: <RadialAxis>[
-                                RadialAxis(
-                                  minimum: 0,
-                                  maximum: maxVib,
-                                  startAngle: 180,
-                                  endAngle: 0,
-                                  canScaleToFit: true,
-                                  pointers: <GaugePointer>[
-                                    NeedlePointer(
-                                      value: vibracion,
-                                      enableAnimation: true,
-                                    ),
-                                  ],
-                                  ranges: <GaugeRange>[
-                                    GaugeRange(
-                                      startValue: 0,
-                                      endValue: vibAlerta,
-                                      color: Colors.green,
-                                    ),
-                                    GaugeRange(
-                                      startValue: vibAlerta,
-                                      endValue: vibPeligro,
-                                      color: Colors.orange,
-                                    ),
-                                    GaugeRange(
-                                      startValue: vibPeligro,
-                                      endValue: maxVib,
-                                      color: Colors.red,
-                                    ),
-                                  ],
-                                ),
-                              ],
+                            Expanded(
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: maxVolt,
+                                    startAngle: 180,
+                                    endAngle: 0,
+                                    canScaleToFit: true,
+                                    pointers: <GaugePointer>[
+                                      NeedlePointer(
+                                        value: voltaje,
+                                        enableAnimation: true,
+                                      ),
+                                    ],
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: voltAlerta,
+                                        color: Colors.green,
+                                      ),
+                                      GaugeRange(
+                                        startValue: voltAlerta,
+                                        endValue: voltPeligro,
+                                        color: Colors.orange,
+                                      ),
+                                      GaugeRange(
+                                        startValue: voltPeligro,
+                                        endValue: maxVolt,
+                                        color: Colors.red,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                          Text(
-                            '${vibracion.toStringAsFixed(1)} mm/s',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                            Text(
+                              '${voltaje.toStringAsFixed(1)} V',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
+                if (medirTemp)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Temperatura (°C)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Expanded(
+                              child: SfLinearGauge(
+                                minimum: 0,
+                                maximum: maxTemp,
+                                orientation: LinearGaugeOrientation.vertical,
+                                ranges: [
+                                  LinearGaugeRange(
+                                    startValue: 0,
+                                    endValue: tAlerta,
+                                    color: Colors.green,
+                                  ),
+                                  LinearGaugeRange(
+                                    startValue: tAlerta,
+                                    endValue: tPeligro,
+                                    color: Colors.orange,
+                                  ),
+                                  LinearGaugeRange(
+                                    startValue: tPeligro,
+                                    endValue: maxTemp,
+                                    color: Colors.red,
+                                  ),
+                                ],
+                                barPointers: [
+                                  LinearBarPointer(
+                                    value: temperatura,
+                                    color: obtenerColorIndicador(
+                                      temperatura,
+                                      tAlerta,
+                                      tPeligro,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '${temperatura.toStringAsFixed(1)} °C',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (medirVib)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Vibración (mm/s)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Expanded(
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: maxVib,
+                                    startAngle: 180,
+                                    endAngle: 0,
+                                    canScaleToFit: true,
+                                    pointers: <GaugePointer>[
+                                      NeedlePointer(
+                                        value: vibracion,
+                                        enableAnimation: true,
+                                      ),
+                                    ],
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: vibAlerta,
+                                        color: Colors.green,
+                                      ),
+                                      GaugeRange(
+                                        startValue: vibAlerta,
+                                        endValue: vibPeligro,
+                                        color: Colors.orange,
+                                      ),
+                                      GaugeRange(
+                                        startValue: vibPeligro,
+                                        endValue: maxVib,
+                                        color: Colors.red,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '${vibracion.toStringAsFixed(1)} mm/s',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (medirHum)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Humedad (%)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Expanded(
+                              child: SfRadialGauge(
+                                axes: <RadialAxis>[
+                                  RadialAxis(
+                                    minimum: 0,
+                                    maximum: 100,
+                                    ranges: <GaugeRange>[
+                                      GaugeRange(
+                                        startValue: 0,
+                                        endValue: humAlerta,
+                                        color: Colors.green,
+                                      ),
+                                      GaugeRange(
+                                        startValue: humAlerta,
+                                        endValue: humPeligro,
+                                        color: Colors.orange,
+                                      ),
+                                      GaugeRange(
+                                        startValue: humPeligro,
+                                        endValue: 100,
+                                        color: Colors.red,
+                                      ),
+                                    ],
+                                    pointers: <GaugePointer>[
+                                      NeedlePointer(
+                                        value: humedad,
+                                        enableAnimation: true,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '${humedad.toStringAsFixed(1)} %',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 30),

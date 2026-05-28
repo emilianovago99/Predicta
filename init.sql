@@ -41,6 +41,13 @@ CREATE TABLE Maquina (
     volt_peligro FLOAT DEFAULT 130.0,
     vel_alerta INT DEFAULT 800,
     vel_peligro INT DEFAULT 1500,
+    hum_alerta FLOAT DEFAULT 60.0,
+    hum_peligro FLOAT DEFAULT 80.0,
+    medir_temp BOOLEAN DEFAULT TRUE,
+    medir_vib BOOLEAN DEFAULT TRUE,
+    medir_volt BOOLEAN DEFAULT TRUE,
+    medir_vel BOOLEAN DEFAULT TRUE,
+    medir_hum BOOLEAN DEFAULT TRUE,
     FOREIGN KEY (id_area) REFERENCES Area(id_area) ON DELETE CASCADE
 );
 
@@ -51,6 +58,7 @@ CREATE TABLE SensorData (
     vibracion FLOAT NOT NULL,
     voltaje FLOAT NOT NULL,
     velocidad FLOAT NOT NULL,
+    humedad FLOAT NOT NULL,
     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (id_maquina) REFERENCES Maquina(id_maquina) ON DELETE CASCADE
 );

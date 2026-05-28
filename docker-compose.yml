@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  mariadb:
+    image: mariadb:10.11
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_seguro
+      MYSQL_DATABASE: mecanimales_db
+      MYSQL_USER: api_user
+      MYSQL_PASSWORD: api_password_seguro
+    ports:
+      - "3307:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  mariadb_data:

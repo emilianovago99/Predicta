@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config/api_config.dart';
 import 'pantalla_monitoreo.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   runApp(const AppMantenimiento());
 }
 
@@ -13,7 +17,7 @@ class AppMantenimiento extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Mecanimales Dashboard',
+      title: 'Predicta Dashboard',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
@@ -70,7 +74,7 @@ class _SplashScreenState extends State<SplashScreen> {
               const FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  'MECANIMALES',
+                  'PREDICTA',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 48,
@@ -81,7 +85,7 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               const SizedBox(height: 10),
               const Text(
-                'SaaS Industrial 4.0',
+                'Mantenimiento Predictivo',
                 style: TextStyle(
                   color: Colors.white70,
                   fontSize: 20,
@@ -115,7 +119,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
       cargando = true;
     });
 
-    final url = Uri.parse('http://10.10.7.161:8000/api/login');
+    final url = ApiConfig.uri('/api/login');
     try {
       final response = await http.post(
         url,
@@ -204,7 +208,7 @@ class _PantallaLoginState extends State<PantallaLogin> {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'MECANIMALES',
+                  'PREDICTA',
                   style: TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
@@ -212,8 +216,12 @@ class _PantallaLoginState extends State<PantallaLogin> {
                   ),
                 ),
                 const Text(
-                  'SaaS Industrial 4.0',
-                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                  'Predicta',
+                  style: TextStyle(
+                    fontSize: 16,
+                    color: Colors.teal,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 40),
                 TextField(
@@ -284,7 +292,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> cargarEmpresas() async {
-    final url = Uri.parse('http://10.10.7.161:8000/api/empresas');
+    final url = ApiConfig.uri('/api/empresas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -389,8 +397,8 @@ class _PantallaCrearEmpresaState extends State<PantallaCrearEmpresa> {
       return;
     }
 
-    final urlEmpresa = Uri.parse(
-      'http://10.10.7.161:8000/api/empresas_rapido?nombre=${nombreEmpresaCtrl.text}',
+    final urlEmpresa = ApiConfig.uri(
+      '/api/empresas_rapido?nombre=${Uri.encodeComponent(nombreEmpresaCtrl.text)}',
     );
 
     try {
@@ -400,7 +408,7 @@ class _PantallaCrearEmpresaState extends State<PantallaCrearEmpresa> {
         final dataEmpresa = json.decode(responseEmpresa.body);
         final idEmpresaGenerada = dataEmpresa['id_empresa'];
 
-        final urlUsuario = Uri.parse('http://10.10.7.161:8000/api/usuarios');
+        final urlUsuario = ApiConfig.uri('/api/usuarios');
         final responseUsuario = await http.post(
           urlUsuario,
           headers: {'Content-Type': 'application/json'},
@@ -536,9 +544,7 @@ class _PantallaAreasState extends State<PantallaAreas> {
   }
 
   Future<void> cargarAreas() async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/empresas/${widget.idEmpresa}/areas',
-    );
+    final url = ApiConfig.uri('/api/empresas/${widget.idEmpresa}/areas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -694,7 +700,7 @@ class PantallaCrearParticipante extends StatelessWidget {
     if (emailCtrl.text.isEmpty) {
       return;
     }
-    final url = Uri.parse('http://10.10.7.161:8000/api/usuarios');
+    final url = ApiConfig.uri('/api/usuarios');
     try {
       final response = await http.post(
         url,
@@ -788,7 +794,7 @@ class PantallaCrearArea extends StatelessWidget {
   PantallaCrearArea({super.key, required this.idEmpresa});
 
   Future<void> guardarArea(BuildContext context) async {
-    final url = Uri.parse('http://10.10.7.161:8000/api/areas');
+    final url = ApiConfig.uri('/api/areas');
     try {
       final response = await http.post(
         url,
@@ -878,9 +884,7 @@ class _PantallaMaquinasState extends State<PantallaMaquinas> {
   }
 
   Future<void> cargarMaquinas() async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/areas/${widget.idArea}/maquinas',
-    );
+    final url = ApiConfig.uri('/api/areas/${widget.idArea}/maquinas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -1024,13 +1028,14 @@ class _PantallaVincularMaquinaState extends State<PantallaVincularMaquina> {
   final TextEditingController nombreCtrl = TextEditingController();
 
   bool medirTemp = true;
+  bool medirTempAmb = true;
   bool medirVib = true;
   bool medirVolt = true;
   bool medirVel = true;
   bool medirHum = true;
 
   Future<void> guardarMaquina(BuildContext context) async {
-    final url = Uri.parse('http://10.10.7.161:8000/api/maquinas');
+    final url = ApiConfig.uri('/api/maquinas');
     try {
       final response = await http.post(
         url,
@@ -1040,6 +1045,7 @@ class _PantallaVincularMaquinaState extends State<PantallaVincularMaquina> {
           'id_maquina': idMaquinaCtrl.text,
           'nombre': nombreCtrl.text,
           'medir_temp': medirTemp,
+          'medir_temp_amb': medirTempAmb,
           'medir_vib': medirVib,
           'medir_volt': medirVolt,
           'medir_vel': medirVel,
@@ -1092,11 +1098,20 @@ class _PantallaVincularMaquinaState extends State<PantallaVincularMaquina> {
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
             SwitchListTile(
-              title: const Text('Temperatura'),
+              title: const Text('Temperatura motor'),
               value: medirTemp,
               onChanged: (bool valor) {
                 setState(() {
                   medirTemp = valor;
+                });
+              },
+            ),
+            SwitchListTile(
+              title: const Text('Temperatura ambiente'),
+              value: medirTempAmb,
+              onChanged: (bool valor) {
+                setState(() {
+                  medirTempAmb = valor;
                 });
               },
             ),
@@ -1182,11 +1197,14 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
   TextEditingController velPeligroCtrl = TextEditingController();
   TextEditingController humAlertaCtrl = TextEditingController();
   TextEditingController humPeligroCtrl = TextEditingController();
+  TextEditingController tAmbAlertaCtrl = TextEditingController();
+  TextEditingController tAmbPeligroCtrl = TextEditingController();
 
   int? idAreaActual;
   List<dynamic> areasDisponibles = [];
 
   bool medirTemp = true;
+  bool medirTempAmb = true;
   bool medirVib = true;
   bool medirVolt = true;
   bool medirVel = true;
@@ -1199,9 +1217,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
   }
 
   Future<void> cargarAreas() async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/empresas/${widget.idEmpresa}/areas',
-    );
+    final url = ApiConfig.uri('/api/empresas/${widget.idEmpresa}/areas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -1215,9 +1231,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
   }
 
   Future<void> cargarConfiguracion() async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/config',
-    );
+    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/config');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -1235,12 +1249,27 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
           velPeligroCtrl.text = data['vel_peligro'].toString();
           humAlertaCtrl.text = data['hum_alerta'].toString();
           humPeligroCtrl.text = data['hum_peligro'].toString();
+          if (data['temp_amb_alerta'] != null) {
+            tAmbAlertaCtrl.text = data['temp_amb_alerta'].toString();
+          }
+          if (data['temp_amb_peligro'] != null) {
+            tAmbPeligroCtrl.text = data['temp_amb_peligro'].toString();
+          } else {
+            tAmbAlertaCtrl.text = '30';
+            tAmbPeligroCtrl.text = '38';
+          }
 
           if (data['medir_temp'] == 1) {
             medirTemp = true;
           }
           if (data['medir_temp'] == 0) {
             medirTemp = false;
+          }
+          if (data['medir_temp_amb'] == 1) {
+            medirTempAmb = true;
+          }
+          if (data['medir_temp_amb'] == 0) {
+            medirTempAmb = false;
           }
           if (data['medir_vib'] == 1) {
             medirVib = true;
@@ -1277,9 +1306,7 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
     if (idAreaActual == null) {
       return;
     }
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/config',
-    );
+    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/config');
     try {
       await http.put(
         url,
@@ -1297,7 +1324,10 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
           'vel_peligro': int.parse(velPeligroCtrl.text),
           'hum_alerta': double.parse(humAlertaCtrl.text),
           'hum_peligro': double.parse(humPeligroCtrl.text),
+          'temp_amb_alerta': double.parse(tAmbAlertaCtrl.text),
+          'temp_amb_peligro': double.parse(tAmbPeligroCtrl.text),
           'medir_temp': medirTemp,
+          'medir_temp_amb': medirTempAmb,
           'medir_vib': medirVib,
           'medir_volt': medirVolt,
           'medir_vel': medirVel,
@@ -1408,13 +1438,24 @@ class _PantallaConfiguracionState extends State<PantallaConfiguracion> {
               ),
             const SizedBox(height: 32),
             construirSeccionLimite(
-              'Límites de Temperatura (°C)',
+              'Límites temp. motor (°C)',
               tAlertaCtrl,
               tPeligroCtrl,
               medirTemp,
               (bool val) {
                 setState(() {
                   medirTemp = val;
+                });
+              },
+            ),
+            construirSeccionLimite(
+              'Límites temp. ambiente (°C)',
+              tAmbAlertaCtrl,
+              tAmbPeligroCtrl,
+              medirTempAmb,
+              (bool val) {
+                setState(() {
+                  medirTempAmb = val;
                 });
               },
             ),

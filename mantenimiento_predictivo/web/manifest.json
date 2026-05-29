@@ -1,11 +1,11 @@
 {
-    "name": "mantenimiento_predictivo",
-    "short_name": "mantenimiento_predictivo",
+    "name": "Predicta",
+    "short_name": "Predicta",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Mantenimiento predictivo industrial - Predicta",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

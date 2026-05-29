@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config/api_config.dart';
 
 class PantallaInstalador extends StatefulWidget {
   const PantallaInstalador({super.key});
@@ -33,7 +34,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> cargarEmpresas() async {
-    final url = Uri.parse('http://10.10.7.161:8000/api/empresas');
+    final url = ApiConfig.uri('/api/empresas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -49,9 +50,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> cargarAreas(int idEmpresa) async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/empresas/$idEmpresa/areas',
-    );
+    final url = ApiConfig.uri('/api/empresas/$idEmpresa/areas');
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
@@ -68,8 +67,8 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   }
 
   Future<void> crearEmpresa(String nombreEmpresa) async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/empresas_rapido?nombre=$nombreEmpresa',
+    final url = ApiConfig.uri(
+      '/api/empresas_rapido?nombre=${Uri.encodeComponent(nombreEmpresa)}',
     );
     try {
       final response = await http.post(url);
@@ -93,7 +92,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
   Future<void> crearArea(String nombreArea) async {
     if (empresaSeleccionada == null) return;
 
-    final url = Uri.parse('http://10.10.7.161:8000/api/areas');
+    final url = ApiConfig.uri('/api/areas');
     try {
       final response = await http.post(
         url,
@@ -177,7 +176,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
       mensaje = '';
     });
 
-    final url = Uri.parse('http://10.10.7.161:8000/api/maquinas');
+    final url = ApiConfig.uri('/api/maquinas');
 
     try {
       final response = await http.post(
@@ -318,7 +317,7 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
-        title: const Text('Mecanimales - Admin'),
+        title: const Text('Predicta - Admin'),
         backgroundColor: Colors.teal.shade800,
         foregroundColor: Colors.white,
       ),

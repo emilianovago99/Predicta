@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_dotenv: ^5.1.0
   http: ^1.2.0
   syncfusion_flutter_charts: ^33.2.8
   syncfusion_flutter_gauges: ^33.2.8
@@ -20,3 +21,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - .env

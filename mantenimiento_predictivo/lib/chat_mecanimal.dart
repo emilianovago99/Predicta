@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'config/api_config.dart';
 
 class ChatMecanimal extends StatefulWidget {
   final String idMaquina;
@@ -27,7 +28,7 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
   }
 
   Future<void> enviarMensaje() async {
-    String texto = controlador.text;
+    String texto = controlador.text.trim();
     if (texto.isEmpty) {
       return;
     }
@@ -38,7 +39,7 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
       escribiendo = true;
     });
 
-    final url = Uri.parse('http://10.10.7.161:8000/api/chat');
+    final url = ApiConfig.uri('/api/chat');
     try {
       final response = await http.post(
         url,
@@ -47,18 +48,28 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
       );
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          mensajes.add({'rol': 'bot', 'texto': data['respuesta']});
-          escribiendo = false;
-        });
-      }
-
-      if (response.statusCode != 200) {
+        try {
+          final data = json.decode(response.body);
+          final respuesta = data['respuesta'] ?? 'Sin respuesta';
+          setState(() {
+            mensajes.add({'rol': 'bot', 'texto': respuesta});
+            escribiendo = false;
+          });
+        } catch (parseError) {
+          setState(() {
+            mensajes.add({
+              'rol': 'bot',
+              'texto': 'Error procesando respuesta del servidor. 🤔',
+            });
+            escribiendo = false;
+          });
+        }
+      } else {
         setState(() {
           mensajes.add({
             'rol': 'bot',
-            'texto': 'Mecanimal confundido. Algo falló en el servidor.',
+            'texto':
+                'Error ${response.statusCode}: Mecanimal con falla en servidor. 🔧',
           });
           escribiendo = false;
         });
@@ -67,7 +78,7 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
       setState(() {
         mensajes.add({
           'rol': 'bot',
-          'texto': 'Mecanimal desconectado. Revisa la red 🔌',
+          'texto': 'Mecanimal desconectado. Revisa la conexión de red 🔌',
         });
         escribiendo = false;
       });

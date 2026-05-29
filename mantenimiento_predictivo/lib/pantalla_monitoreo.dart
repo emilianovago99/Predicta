@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
+import 'config/api_config.dart';
 import 'chat_mecanimal.dart';
 
 class PuntoGrafica {
@@ -27,6 +28,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   String diagnostico = 'Sin alertas recientes.';
 
   double temperatura = 0.0;
+  double tempAmbiente = 0.0;
   double vibracion = 0.0;
   int velocidad = 0;
   double voltaje = 0.0;
@@ -34,25 +36,33 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
 
   double tAlerta = 50.0;
   double tPeligro = 60.0;
+  double tAmbAlerta = 30.0;
+  double tAmbPeligro = 38.0;
   double vibAlerta = 4.0;
   double vibPeligro = 7.0;
-  double voltAlerta = 100.0;
-  double voltPeligro = 130.0;
-  int velAlerta = 800;
-  int velPeligro = 1500;
+  double voltAlerta = 125.0;
+  double voltPeligro = 135.0;
+  int velAlerta = 1800;
+  int velPeligro = 1900;
   double humAlerta = 60.0;
   double humPeligro = 80.0;
 
   bool medirTemp = true;
+  bool medirTempAmb = true;
   bool medirVib = true;
   bool medirVolt = true;
   bool medirVel = true;
   bool medirHum = true;
 
-  String metricaActiva = 'Temperatura';
+  String metricaActiva = 'Temp. motor';
   String ultimaAlertaProcesada = '';
 
+  String estadoPrediccion = 'Evaluando métricas...';
+  int rulCiclos = -1;
+  int rulPeligroCiclos = -1;
+
   List<PuntoGrafica> histTemp = [];
+  List<PuntoGrafica> histTempAmb = [];
   List<PuntoGrafica> histVib = [];
   List<PuntoGrafica> histVel = [];
   List<PuntoGrafica> histVolt = [];
@@ -66,8 +76,10 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   void initState() {
     super.initState();
     obtenerDatosMaquina();
+    obtenerPrediccionML();
     temporizador = Timer.periodic(const Duration(seconds: 2), (timer) {
       obtenerDatosMaquina();
+      obtenerPrediccionML();
     });
   }
 
@@ -86,6 +98,10 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     if (tipoAlerta == 'peligro') {
       colorBanner = Colors.red.shade800;
       iconoBanner = Icons.report_problem_rounded;
+    }
+    if (tipoAlerta == 'evento') {
+      colorBanner = Colors.deepPurple.shade700;
+      iconoBanner = Icons.bolt_rounded;
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -123,10 +139,30 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     );
   }
 
+  Future<void> obtenerPrediccionML() async {
+    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/prediccion');
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          estadoPrediccion = data['prediccion'];
+          rulCiclos = data['rul_ciclos'];
+          final peligro = data['rul_peligro_ciclos'];
+          if (peligro is int) {
+            rulPeligroCiclos = peligro;
+          } else if (peligro is num) {
+            rulPeligroCiclos = peligro.toInt();
+          }
+        });
+      }
+    } catch (e) {
+      estadoPrediccion = 'Error de conectividad ML';
+    }
+  }
+
   Future<void> obtenerDatosMaquina() async {
-    final url = Uri.parse(
-      'http://10.10.7.161:8000/api/maquinas/${widget.idMaquina}/datos',
-    );
+    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/datos');
 
     try {
       final response = await http.get(url);
@@ -148,12 +184,24 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           velPeligro = data['maquina']['vel_peligro'].toInt();
           humAlerta = data['maquina']['hum_alerta'].toDouble();
           humPeligro = data['maquina']['hum_peligro'].toDouble();
+          if (data['maquina']['temp_amb_alerta'] != null) {
+            tAmbAlerta = data['maquina']['temp_amb_alerta'].toDouble();
+          }
+          if (data['maquina']['temp_amb_peligro'] != null) {
+            tAmbPeligro = data['maquina']['temp_amb_peligro'].toDouble();
+          }
 
           if (data['maquina']['medir_temp'] == 1) {
             medirTemp = true;
           }
           if (data['maquina']['medir_temp'] == 0) {
             medirTemp = false;
+          }
+          if (data['maquina']['medir_temp_amb'] == 1) {
+            medirTempAmb = true;
+          }
+          if (data['maquina']['medir_temp_amb'] == 0) {
+            medirTempAmb = false;
           }
           if (data['maquina']['medir_vib'] == 1) {
             medirVib = true;
@@ -182,9 +230,13 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
 
           if (data['ultima_alerta'] != null) {
             diagnostico = data['ultima_alerta']['diagnostico'];
+            String tipoAlertaUi = estado;
+            if (data['ultima_alerta']['tipo'] != null) {
+              tipoAlertaUi = data['ultima_alerta']['tipo'].toString();
+            }
             if (ultimaAlertaProcesada != diagnostico) {
               ultimaAlertaProcesada = diagnostico;
-              lanzarNotificacionPantalla(diagnostico, estado);
+              lanzarNotificacionPantalla(diagnostico, tipoAlertaUi);
             }
           }
 
@@ -197,12 +249,16 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
             List<dynamic> listaRaw = data['historial'];
             if (listaRaw.isNotEmpty) {
               temperatura = listaRaw[0]['temperatura'].toDouble();
+              if (listaRaw[0]['temp_ambiente'] != null) {
+                tempAmbiente = listaRaw[0]['temp_ambiente'].toDouble();
+              }
               vibracion = listaRaw[0]['vibracion'].toDouble();
               velocidad = listaRaw[0]['velocidad'].toInt();
               voltaje = listaRaw[0]['voltaje'].toDouble();
               humedad = listaRaw[0]['humedad'].toDouble();
 
               histTemp.clear();
+              histTempAmb.clear();
               histVib.clear();
               histVel.clear();
               histVolt.clear();
@@ -215,6 +271,11 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                 histTemp.add(
                   PuntoGrafica(contador, lectura['temperatura'].toDouble()),
                 );
+                if (lectura['temp_ambiente'] != null) {
+                  histTempAmb.add(
+                    PuntoGrafica(contador, lectura['temp_ambiente'].toDouble()),
+                  );
+                }
                 histVib.add(
                   PuntoGrafica(contador, lectura['vibracion'].toDouble()),
                 );
@@ -243,7 +304,13 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   }
 
   void actualizarDatosGrafica() {
-    if (metricaActiva == 'Temperatura') {
+    if (metricaActiva == 'Temp. motor') {
+      datosGraficaActual = histTemp;
+    }
+    if (metricaActiva == 'Temp. ambiente') {
+      datosGraficaActual = histTempAmb;
+    }
+    if (metricaActiva == 'Comparar temps') {
       datosGraficaActual = histTemp;
     }
     if (metricaActiva == 'Vibración') {
@@ -284,8 +351,26 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     return Colors.green;
   }
 
+  Color obtenerColorPrediccion() {
+    if (rulCiclos >= 0) {
+      if (rulCiclos < 20) {
+        return Colors.red;
+      }
+      if (rulCiclos < 50) {
+        return Colors.orange.shade800;
+      }
+    }
+    return Colors.green.shade700;
+  }
+
   Color obtenerColorGrafica() {
-    if (metricaActiva == 'Temperatura') {
+    if (metricaActiva == 'Temp. motor') {
+      return Colors.red;
+    }
+    if (metricaActiva == 'Temp. ambiente') {
+      return Colors.lightBlue;
+    }
+    if (metricaActiva == 'Comparar temps') {
       return Colors.red;
     }
     if (metricaActiva == 'Vibración') {
@@ -301,7 +386,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   }
 
   String obtenerUnidadGrafica() {
-    if (metricaActiva == 'Temperatura') {
+    if (metricaActiva == 'Temp. motor' ||
+        metricaActiva == 'Temp. ambiente' ||
+        metricaActiva == 'Comparar temps') {
       return '°C';
     }
     if (metricaActiva == 'Vibración') {
@@ -317,8 +404,11 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   }
 
   double obtenerLimiteGrafica() {
-    if (metricaActiva == 'Temperatura') {
+    if (metricaActiva == 'Temp. motor' || metricaActiva == 'Comparar temps') {
       return tPeligro;
+    }
+    if (metricaActiva == 'Temp. ambiente') {
+      return tAmbPeligro;
     }
     if (metricaActiva == 'Vibración') {
       return vibPeligro;
@@ -332,10 +422,153 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     return voltPeligro;
   }
 
+  double obtenerAlertaGrafica() {
+    if (metricaActiva == 'Temp. motor' || metricaActiva == 'Comparar temps') {
+      return tAlerta;
+    }
+    if (metricaActiva == 'Temp. ambiente') {
+      return tAmbAlerta;
+    }
+    if (metricaActiva == 'Vibración') {
+      return vibAlerta;
+    }
+    if (metricaActiva == 'Velocidad') {
+      return velAlerta.toDouble();
+    }
+    if (metricaActiva == 'Humedad') {
+      return humAlerta;
+    }
+    return voltAlerta;
+  }
+
+  double _umbralBajo(double alerta, double peligro) {
+    return alerta < peligro ? alerta : peligro;
+  }
+
+  double _umbralAlto(double alerta, double peligro) {
+    return alerta < peligro ? peligro : alerta;
+  }
+
+  /// Escala máxima del eje/medidor: ajustada a alerta, crítico y valor actual.
+  double maxEscala(
+    double alerta,
+    double peligro,
+    List<double> valoresActuales, {
+    double minimoEje = 0,
+  }) {
+    double max = peligro;
+    if (alerta > max) {
+      max = alerta;
+    }
+    for (final v in valoresActuales) {
+      if (v > max) {
+        max = v;
+      }
+    }
+    final base = max - minimoEje;
+    final margen = base * 0.12;
+    final extra = margen < 1.0 ? 1.0 : margen;
+    return max + extra;
+  }
+
+  List<double> valoresParaEscalaGrafica() {
+    if (metricaActiva == 'Comparar temps') {
+      return [
+        ...histTemp.map((p) => p.valor),
+        ...histTempAmb.map((p) => p.valor),
+      ];
+    }
+    return datosGraficaActual.map((p) => p.valor).toList();
+  }
+
+  double obtenerMaxEjeGrafica() {
+    if (metricaActiva == 'Comparar temps') {
+      final peligro = tPeligro > tAmbPeligro ? tPeligro : tAmbPeligro;
+      final alerta = tAlerta < tAmbAlerta ? tAlerta : tAmbAlerta;
+      final vals = valoresParaEscalaGrafica();
+      return maxEscala(
+        alerta,
+        peligro,
+        vals.isEmpty ? [peligro] : vals,
+      );
+    }
+    final vals = valoresParaEscalaGrafica();
+    return maxEscala(
+      obtenerAlertaGrafica(),
+      obtenerLimiteGrafica(),
+      vals.isEmpty ? [obtenerLimiteGrafica()] : vals,
+    );
+  }
+
+  List<PlotBand> plotBandsGrafica() {
+    if (metricaActiva == 'Comparar temps') {
+      return [
+        PlotBand(
+          isVisible: true,
+          start: tAlerta,
+          end: tAlerta + 0.01,
+          color: Colors.orange.withOpacity(0.35),
+          text: 'Alerta motor',
+          textStyle: const TextStyle(color: Colors.orange, fontSize: 10),
+        ),
+        PlotBand(
+          isVisible: true,
+          start: tPeligro,
+          end: tPeligro + 0.01,
+          color: Colors.red.withOpacity(0.4),
+          text: 'Crítico motor',
+          textStyle: const TextStyle(color: Colors.red, fontSize: 10),
+        ),
+        PlotBand(
+          isVisible: true,
+          start: tAmbAlerta,
+          end: tAmbAlerta + 0.01,
+          color: Colors.lightBlue.withOpacity(0.35),
+          text: 'Alerta amb.',
+          textStyle: const TextStyle(color: Colors.blue, fontSize: 10),
+        ),
+        PlotBand(
+          isVisible: true,
+          start: tAmbPeligro,
+          end: tAmbPeligro + 0.01,
+          color: Colors.red.shade300.withOpacity(0.4),
+          text: 'Crítico amb.',
+          textStyle: TextStyle(color: Colors.red.shade700, fontSize: 10),
+        ),
+      ];
+    }
+    final alerta = obtenerAlertaGrafica();
+    final peligro = obtenerLimiteGrafica();
+    return [
+      PlotBand(
+        isVisible: true,
+        start: alerta,
+        end: alerta + 0.01,
+        color: Colors.orange.withOpacity(0.35),
+        text: 'Alerta',
+        textStyle: const TextStyle(color: Colors.orange, fontSize: 11),
+      ),
+      PlotBand(
+        isVisible: true,
+        start: peligro,
+        end: peligro + 0.01,
+        color: Colors.red.withOpacity(0.45),
+        text: 'Crítico',
+        textStyle: const TextStyle(color: Colors.red, fontSize: 11),
+      ),
+    ];
+  }
+
   List<Widget> construirBotonesMetricas() {
     List<Widget> chips = [];
     if (medirTemp) {
-      chips.add(crearChoiceChip('Temperatura'));
+      chips.add(crearChoiceChip('Temp. motor'));
+    }
+    if (medirTempAmb) {
+      chips.add(crearChoiceChip('Temp. ambiente'));
+    }
+    if (medirTemp && medirTempAmb) {
+      chips.add(crearChoiceChip('Comparar temps'));
     }
     if (medirVib) {
       chips.add(crearChoiceChip('Vibración'));
@@ -383,25 +616,26 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
       anchoTarjeta = (anchoPantalla / 3) - 24;
     }
 
-    double maxVel = 2000.0;
-    if (velPeligro > 1800) {
-      maxVel = velPeligro + 500.0;
-    }
+    final velLo = _umbralBajo(velAlerta.toDouble(), velPeligro.toDouble());
+    final velHi = _umbralAlto(velAlerta.toDouble(), velPeligro.toDouble());
+    final voltLo = _umbralBajo(voltAlerta, voltPeligro);
+    final voltHi = _umbralAlto(voltAlerta, voltPeligro);
+    final tempLo = _umbralBajo(tAlerta, tPeligro);
+    final tempHi = _umbralAlto(tAlerta, tPeligro);
+    final tempAmbLo = _umbralBajo(tAmbAlerta, tAmbPeligro);
+    final tempAmbHi = _umbralAlto(tAmbAlerta, tAmbPeligro);
+    final vibLo = _umbralBajo(vibAlerta, vibPeligro);
+    final vibHi = _umbralAlto(vibAlerta, vibPeligro);
+    final humLo = _umbralBajo(humAlerta, humPeligro);
+    final humHi = _umbralAlto(humAlerta, humPeligro);
 
-    double maxVolt = 250.0;
-    if (voltPeligro > 200) {
-      maxVolt = voltPeligro + 50.0;
-    }
-
-    double maxTemp = 120.0;
-    if (tPeligro > 100) {
-      maxTemp = tPeligro + 30.0;
-    }
-
-    double maxVib = 10.0;
-    if (vibPeligro > 8) {
-      maxVib = vibPeligro + 5.0;
-    }
+    final maxVel = maxEscala(velLo, velHi, [velocidad.toDouble()]);
+    final maxVolt = maxEscala(voltLo, voltHi, [voltaje]);
+    final maxTemp = maxEscala(tempLo, tempHi, [temperatura]);
+    final maxTempAmb = maxEscala(tempAmbLo, tempAmbHi, [tempAmbiente]);
+    final maxVib = maxEscala(vibLo, vibHi, [vibracion]);
+    final maxHum = maxEscala(humLo, humHi, [humedad]);
+    final maxHumEje = maxHum > 100 ? maxHum : 100.0;
 
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
@@ -415,6 +649,80 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blueGrey.shade50,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.psychology,
+                        color: Colors.blueGrey.shade700,
+                        size: 40,
+                      ),
+                    ),
+                    const SizedBox(width: 20),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Análisis Predictivo ML',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blueGrey,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            estadoPrediccion,
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: obtenerColorPrediccion(),
+                            ),
+                          ),
+                          if (rulCiclos >= 0 && rulCiclos < 9999)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: Text(
+                                'Ciclos hasta zona preventiva (amarillo): $rulCiclos',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          if (rulPeligroCiclos >= 0 && rulPeligroCiclos < 9999)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6.0),
+                              child: Text(
+                                'Ciclos hasta zona de peligro (rojo): $rulPeligroCiclos',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.red.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
             if (estado == 'peligro')
               Card(
                 color: Colors.red.shade50,
@@ -458,6 +766,49 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                   ),
                 ),
               ),
+            if (estado == 'alerta')
+              Card(
+                color: Colors.orange.shade50,
+                shape: RoundedRectangleBorder(
+                  side: BorderSide(color: Colors.orange.shade700, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.orange.shade700,
+                            size: 30,
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'PRECAUCIÓN',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        diagnostico,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             const SizedBox(height: 20),
             Wrap(
               spacing: 16.0,
@@ -471,7 +822,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     child: Card(
                       elevation: 4,
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(16.0),
                         child: Column(
                           children: [
                             const Text(
@@ -481,25 +832,28 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            const SizedBox(height: 10),
                             Expanded(
                               child: SfRadialGauge(
                                 axes: <RadialAxis>[
                                   RadialAxis(
                                     minimum: 0,
                                     maximum: maxVel,
+                                    startAngle: 135,
+                                    endAngle: 45,
                                     ranges: <GaugeRange>[
                                       GaugeRange(
                                         startValue: 0,
-                                        endValue: velAlerta.toDouble(),
+                                        endValue: velLo,
                                         color: Colors.green,
                                       ),
                                       GaugeRange(
-                                        startValue: velAlerta.toDouble(),
-                                        endValue: velPeligro.toDouble(),
+                                        startValue: velLo,
+                                        endValue: velHi,
                                         color: Colors.orange,
                                       ),
                                       GaugeRange(
-                                        startValue: velPeligro.toDouble(),
+                                        startValue: velHi,
                                         endValue: maxVel,
                                         color: Colors.red,
                                       ),
@@ -508,6 +862,10 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                       NeedlePointer(
                                         value: velocidad.toDouble(),
                                         enableAnimation: true,
+                                        needleEndWidth: 5,
+                                        knobStyle: const KnobStyle(
+                                          knobRadius: 0.08,
+                                        ),
                                       ),
                                     ],
                                     annotations: <GaugeAnnotation>[
@@ -520,7 +878,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                           ),
                                         ),
                                         angle: 90,
-                                        positionFactor: 0.5,
+                                        positionFactor: 0.8,
                                       ),
                                     ],
                                   ),
@@ -539,7 +897,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     child: Card(
                       elevation: 4,
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(16.0),
                         child: Column(
                           children: [
                             const Text(
@@ -549,6 +907,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            const SizedBox(height: 10),
                             Expanded(
                               child: SfRadialGauge(
                                 axes: <RadialAxis>[
@@ -562,21 +921,24 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                       NeedlePointer(
                                         value: voltaje,
                                         enableAnimation: true,
+                                        needleLength: 0.7,
+                                        needleStartWidth: 2,
+                                        needleEndWidth: 4,
                                       ),
                                     ],
                                     ranges: <GaugeRange>[
                                       GaugeRange(
                                         startValue: 0,
-                                        endValue: voltAlerta,
+                                        endValue: voltLo,
                                         color: Colors.green,
                                       ),
                                       GaugeRange(
-                                        startValue: voltAlerta,
-                                        endValue: voltPeligro,
+                                        startValue: voltLo,
+                                        endValue: voltHi,
                                         color: Colors.orange,
                                       ),
                                       GaugeRange(
-                                        startValue: voltPeligro,
+                                        startValue: voltHi,
                                         endValue: maxVolt,
                                         color: Colors.red,
                                       ),
@@ -603,52 +965,170 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     child: Card(
                       elevation: 4,
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(16.0),
                         child: Column(
                           children: [
                             const Text(
-                              'Temperatura (°C)',
+                              'Temp. motor (°C)',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            const SizedBox(height: 10),
                             Expanded(
-                              child: SfLinearGauge(
-                                minimum: 0,
-                                maximum: maxTemp,
-                                orientation: LinearGaugeOrientation.vertical,
-                                ranges: [
-                                  LinearGaugeRange(
-                                    startValue: 0,
-                                    endValue: tAlerta,
-                                    color: Colors.green,
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: SfLinearGauge(
+                                      minimum: 0,
+                                      maximum: maxTemp,
+                                      orientation:
+                                          LinearGaugeOrientation.vertical,
+                                      axisTrackStyle:
+                                          const LinearAxisTrackStyle(
+                                            thickness: 15,
+                                            edgeStyle: LinearEdgeStyle.endCurve,
+                                          ),
+                                      ranges: [
+                                        LinearGaugeRange(
+                                          startValue: 0,
+                                          endValue: tempLo,
+                                          color: Colors.green,
+                                        ),
+                                        LinearGaugeRange(
+                                          startValue: tempLo,
+                                          endValue: tempHi,
+                                          color: Colors.orange,
+                                        ),
+                                        LinearGaugeRange(
+                                          startValue: tempHi,
+                                          endValue: maxTemp,
+                                          color: Colors.red,
+                                        ),
+                                      ],
+                                      barPointers: [
+                                        LinearBarPointer(
+                                          value: temperatura,
+                                          thickness: 15,
+                                          edgeStyle: LinearEdgeStyle.endCurve,
+                                          color: obtenerColorIndicador(
+                                            temperatura,
+                                            tempLo,
+                                            tempHi,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                  LinearGaugeRange(
-                                    startValue: tAlerta,
-                                    endValue: tPeligro,
-                                    color: Colors.orange,
-                                  ),
-                                  LinearGaugeRange(
-                                    startValue: tPeligro,
-                                    endValue: maxTemp,
-                                    color: Colors.red,
-                                  ),
-                                ],
-                                barPointers: [
-                                  LinearBarPointer(
-                                    value: temperatura,
-                                    color: obtenerColorIndicador(
-                                      temperatura,
-                                      tAlerta,
-                                      tPeligro,
+                                  Container(
+                                    width: 24,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: obtenerColorIndicador(
+                                        temperatura,
+                                        tempLo,
+                                        tempHi,
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
                             ),
+                            const SizedBox(height: 10),
                             Text(
                               '${temperatura.toStringAsFixed(1)} °C',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                if (medirTempAmb)
+                  SizedBox(
+                    width: anchoTarjeta,
+                    height: 250,
+                    child: Card(
+                      elevation: 4,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Temp. ambiente (°C)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Expanded(
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: SfLinearGauge(
+                                      minimum: 0,
+                                      maximum: maxTempAmb,
+                                      orientation:
+                                          LinearGaugeOrientation.vertical,
+                                      axisTrackStyle:
+                                          const LinearAxisTrackStyle(
+                                            thickness: 15,
+                                            edgeStyle: LinearEdgeStyle.endCurve,
+                                          ),
+                                      ranges: [
+                                        LinearGaugeRange(
+                                          startValue: 0,
+                                          endValue: tempAmbLo,
+                                          color: Colors.green,
+                                        ),
+                                        LinearGaugeRange(
+                                          startValue: tempAmbLo,
+                                          endValue: tempAmbHi,
+                                          color: Colors.orange,
+                                        ),
+                                        LinearGaugeRange(
+                                          startValue: tempAmbHi,
+                                          endValue: maxTempAmb,
+                                          color: Colors.red,
+                                        ),
+                                      ],
+                                      barPointers: [
+                                        LinearBarPointer(
+                                          value: tempAmbiente,
+                                          thickness: 15,
+                                          edgeStyle: LinearEdgeStyle.endCurve,
+                                          color: obtenerColorIndicador(
+                                            tempAmbiente,
+                                            tempAmbLo,
+                                            tempAmbHi,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(
+                                    width: 24,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: obtenerColorIndicador(
+                                        tempAmbiente,
+                                        tempAmbLo,
+                                        tempAmbHi,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              '${tempAmbiente.toStringAsFixed(1)} °C',
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -665,7 +1145,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     child: Card(
                       elevation: 4,
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(16.0),
                         child: Column(
                           children: [
                             const Text(
@@ -676,39 +1156,57 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                               ),
                             ),
                             Expanded(
-                              child: SfRadialGauge(
-                                axes: <RadialAxis>[
-                                  RadialAxis(
-                                    minimum: 0,
-                                    maximum: maxVib,
-                                    startAngle: 180,
-                                    endAngle: 0,
-                                    canScaleToFit: true,
-                                    pointers: <GaugePointer>[
-                                      NeedlePointer(
-                                        value: vibracion,
-                                        enableAnimation: true,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 40.0,
+                                  horizontal: 10.0,
+                                ),
+                                child: SfLinearGauge(
+                                  minimum: 0,
+                                  maximum: maxVib,
+                                  orientation:
+                                      LinearGaugeOrientation.horizontal,
+                                  ranges: [
+                                    LinearGaugeRange(
+                                      startValue: 0,
+                                      endValue: vibLo,
+                                      color: Colors.green,
+                                    ),
+                                    LinearGaugeRange(
+                                      startValue: vibLo,
+                                      endValue: vibHi,
+                                      color: Colors.orange,
+                                    ),
+                                    LinearGaugeRange(
+                                      startValue: vibHi,
+                                      endValue: maxVib,
+                                      color: Colors.red,
+                                    ),
+                                  ],
+                                  markerPointers: [
+                                    LinearShapePointer(
+                                      value: vibracion,
+                                      shapeType: LinearShapePointerType
+                                          .invertedTriangle,
+                                      color: obtenerColorIndicador(
+                                        vibracion,
+                                        vibLo,
+                                        vibHi,
                                       ),
-                                    ],
-                                    ranges: <GaugeRange>[
-                                      GaugeRange(
-                                        startValue: 0,
-                                        endValue: vibAlerta,
-                                        color: Colors.green,
+                                      position: LinearElementPosition.cross,
+                                    ),
+                                  ],
+                                  barPointers: [
+                                    LinearBarPointer(
+                                      value: vibracion,
+                                      color: obtenerColorIndicador(
+                                        vibracion,
+                                        vibLo,
+                                        vibHi,
                                       ),
-                                      GaugeRange(
-                                        startValue: vibAlerta,
-                                        endValue: vibPeligro,
-                                        color: Colors.orange,
-                                      ),
-                                      GaugeRange(
-                                        startValue: vibPeligro,
-                                        endValue: maxVib,
-                                        color: Colors.red,
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                             Text(
@@ -729,7 +1227,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     child: Card(
                       elevation: 4,
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(16.0),
                         child: Column(
                           children: [
                             const Text(
@@ -739,43 +1237,79 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
+                            const SizedBox(height: 10),
                             Expanded(
                               child: SfRadialGauge(
                                 axes: <RadialAxis>[
                                   RadialAxis(
                                     minimum: 0,
-                                    maximum: 100,
+                                    maximum: maxHumEje,
+                                    showLabels: false,
+                                    showTicks: false,
+                                    startAngle: 270,
+                                    endAngle: 270,
+                                    axisLineStyle: const AxisLineStyle(
+                                      thickness: 0.15,
+                                      thicknessUnit: GaugeSizeUnit.factor,
+                                    ),
                                     ranges: <GaugeRange>[
                                       GaugeRange(
                                         startValue: 0,
-                                        endValue: humAlerta,
-                                        color: Colors.green,
+                                        endValue: humLo,
+                                        color: Colors.green.withOpacity(0.25),
                                       ),
                                       GaugeRange(
-                                        startValue: humAlerta,
-                                        endValue: humPeligro,
-                                        color: Colors.orange,
+                                        startValue: humLo,
+                                        endValue: humHi,
+                                        color: Colors.orange.withOpacity(0.35),
                                       ),
                                       GaugeRange(
-                                        startValue: humPeligro,
-                                        endValue: 100,
-                                        color: Colors.red,
+                                        startValue: humHi,
+                                        endValue: maxHumEje,
+                                        color: Colors.red.withOpacity(0.35),
                                       ),
                                     ],
                                     pointers: <GaugePointer>[
-                                      NeedlePointer(
+                                      RangePointer(
                                         value: humedad,
+                                        width: 0.15,
+                                        sizeUnit: GaugeSizeUnit.factor,
+                                        color: obtenerColorIndicador(
+                                          humedad,
+                                          humLo,
+                                          humHi,
+                                        ),
                                         enableAnimation: true,
+                                      ),
+                                    ],
+                                    annotations: <GaugeAnnotation>[
+                                      GaugeAnnotation(
+                                        widget: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.water_drop,
+                                              color: obtenerColorIndicador(
+                                                humedad,
+                                                humLo,
+                                                humHi,
+                                              ),
+                                              size: 40,
+                                            ),
+                                            Text(
+                                              '${humedad.toStringAsFixed(1)} %',
+                                              style: const TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        positionFactor: 0.1,
                                       ),
                                     ],
                                   ),
                                 ],
-                              ),
-                            ),
-                            Text(
-                              '${humedad.toStringAsFixed(1)} %',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
                               ),
                             ),
                           ],
@@ -815,31 +1349,49 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                         child: SfCartesianChart(
                           primaryXAxis: const NumericAxis(isVisible: false),
                           primaryYAxis: NumericAxis(
+                            minimum: 0,
+                            maximum: obtenerMaxEjeGrafica(),
                             title: AxisTitle(text: obtenerUnidadGrafica()),
-                            plotBands: <PlotBand>[
-                              PlotBand(
-                                isVisible: true,
-                                start: obtenerLimiteGrafica(),
-                                end: obtenerLimiteGrafica() + 0.5,
-                                color: Colors.red,
-                                text: 'Crítico',
-                                textStyle: const TextStyle(color: Colors.red),
-                              ),
-                            ],
+                            plotBands: plotBandsGrafica(),
                           ),
                           tooltipBehavior: TooltipBehavior(enable: true),
                           series: <CartesianSeries<PuntoGrafica, int>>[
-                            SplineAreaSeries<PuntoGrafica, int>(
-                              dataSource: datosGraficaActual,
-                              xValueMapper: (PuntoGrafica datos, _) =>
-                                  datos.tiempo,
-                              yValueMapper: (PuntoGrafica datos, _) =>
-                                  datos.valor,
-                              color: obtenerColorGrafica().withOpacity(0.3),
-                              borderColor: obtenerColorGrafica(),
-                              borderWidth: 3,
-                              name: metricaActiva,
-                            ),
+                            if (metricaActiva != 'Comparar temps')
+                              SplineAreaSeries<PuntoGrafica, int>(
+                                dataSource: datosGraficaActual,
+                                xValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.tiempo,
+                                yValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.valor,
+                                color: obtenerColorGrafica().withOpacity(0.3),
+                                borderColor: obtenerColorGrafica(),
+                                borderWidth: 3,
+                                name: metricaActiva,
+                              ),
+                            if (metricaActiva == 'Comparar temps') ...[
+                              SplineAreaSeries<PuntoGrafica, int>(
+                                dataSource: histTemp,
+                                xValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.tiempo,
+                                yValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.valor,
+                                color: Colors.red.withOpacity(0.25),
+                                borderColor: Colors.red,
+                                borderWidth: 2,
+                                name: 'Motor',
+                              ),
+                              SplineAreaSeries<PuntoGrafica, int>(
+                                dataSource: histTempAmb,
+                                xValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.tiempo,
+                                yValueMapper: (PuntoGrafica datos, _) =>
+                                    datos.valor,
+                                color: Colors.lightBlue.withOpacity(0.25),
+                                borderColor: Colors.lightBlue,
+                                borderWidth: 2,
+                                name: 'Ambiente',
+                              ),
+                            ],
                           ],
                         ),
                       ),

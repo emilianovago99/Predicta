@@ -43,7 +43,10 @@ class _ChatMecanimalState extends State<ChatMecanimal> {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({'mensaje': texto, 'id_maquina': widget.idMaquina}),
       );
 

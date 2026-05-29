@@ -96,7 +96,10 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'id_empresa': empresaSeleccionada,
           'nombre': nombreArea,
@@ -181,7 +184,10 @@ class _PantallaInstaladorState extends State<PantallaInstalador> {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'id_area': areaSeleccionada,
           'nombre': nombreController.text,

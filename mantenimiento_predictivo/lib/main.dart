@@ -123,7 +123,10 @@ class _PantallaLoginState extends State<PantallaLogin> {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'email': correoControlador.text,
           'password': passwordControlador.text,
@@ -411,7 +414,10 @@ class _PantallaCrearEmpresaState extends State<PantallaCrearEmpresa> {
         final urlUsuario = ApiConfig.uri('/api/usuarios');
         final responseUsuario = await http.post(
           urlUsuario,
-          headers: {'Content-Type': 'application/json'},
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
           body: json.encode({
             'id_empresa': idEmpresaGenerada,
             'nombre': jefeNombreCtrl.text,
@@ -704,7 +710,10 @@ class PantallaCrearParticipante extends StatelessWidget {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'id_empresa': idEmpresa,
           'nombre': nombreCtrl.text,
@@ -798,7 +807,10 @@ class PantallaCrearArea extends StatelessWidget {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'id_empresa': idEmpresa,
           'nombre': nombreAreaCtrl.text,
@@ -1039,7 +1051,10 @@ class _PantallaVincularMaquinaState extends State<PantallaVincularMaquina> {
     try {
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: json.encode({
           'id_area': widget.idArea,
           'id_maquina': idMaquinaCtrl.text,

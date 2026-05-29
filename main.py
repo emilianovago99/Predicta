@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 import mysql.connector
 import requests
 import os
@@ -133,7 +133,12 @@ class LoginRequest(BaseModel):
     password: str
 
 class Telemetria(BaseModel):
-    maquina_id: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    maquina_id: str = Field(
+        ...,
+        validation_alias=AliasChoices("maquina_id", "id_maquina"),
+    )
     voltaje:    float
     temperatura: float  # temperatura del motor
     temp_ambiente: float = 25.0

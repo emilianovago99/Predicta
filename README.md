@@ -437,10 +437,4 @@ curl http://127.0.0.1:8000/api/empresas
 | IA | Google Gemini 2.5 Flash |
 | Alertas | Telegram Bot API |
 
----
 
-## Licencia y créditos
-
-Proyecto académico / Hackatec. Ajusta licencia y autores según tu equipo.
-
-Si algo no coincide con tu red (IP, puertos o Docker), lo más habitual es la **URL del API en Flutter** — revísala primero.

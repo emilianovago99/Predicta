@@ -156,7 +156,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     Color colorBanner = Colors.orange.shade800;
     IconData iconoBanner = Icons.analytics_outlined;
 
-    if (tipoAlerta == 'peligro') {
+    if (tipoAlerta == 'critico' || tipoAlerta == 'peligro') {
       colorBanner = Colors.red.shade800;
       iconoBanner = Icons.report_problem_rounded;
     }
@@ -177,7 +177,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    tipoAlerta.toUpperCase(),
+                    '${tipoAlerta.toUpperCase()} · $nombre (${widget.idMaquina})',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
@@ -202,10 +202,13 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
 
   String _resumenParaPantalla(String tipoAlerta) {
     switch (tipoAlerta) {
+      case 'critico':
       case 'peligro':
         return 'Se detectó una condición crítica. Revisa las métricas de la máquina.';
       case 'evento':
         return 'Se detectó un cambio brusco. Revisa el estado de la máquina.';
+      case 'predictivo':
+        return 'Se anticipó una condición de riesgo. Programa una revisión preventiva.';
       case 'alerta':
         return 'Se detectó una condición de alerta. Revisa las métricas de la máquina.';
       default:

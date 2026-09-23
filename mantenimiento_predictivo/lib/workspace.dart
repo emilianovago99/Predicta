@@ -28,6 +28,11 @@ class _WorkspaceState extends State<Workspace> {
   final search = TextEditingController();
   int generation = 0;
   Timer? timer;
+  bool areasTreeExpanded = true;
+  bool treeLoading = false;
+  List<dynamic> treeAreas = [];
+  final Map<int, List<dynamic>> treeMachines = {};
+  final Set<int> expandedTreeAreas = {};
   bool get installer => widget.user['rol'] == 'instalador';
   bool get canEdit => widget.user['rol'] != 'participante';
   int get level => company == null ? 0 : area == null ? 1 : 2;
@@ -39,6 +44,7 @@ class _WorkspaceState extends State<Workspace> {
     super.initState();
     if (!installer) company = {'id_empresa': widget.user['id_empresa'], 'nombre': widget.user['empresa_nombre']};
     load();
+    if (company != null) loadTreeAreas();
     timer = Timer.periodic(const Duration(seconds: 8), (_) { if (level == 2 && !loading) load(silent: true); });
   }
   @override
@@ -59,12 +65,70 @@ class _WorkspaceState extends State<Workspace> {
 
   void navigate(int target, [Map<String, dynamic>? value]) {
     setState(() {
-      if (target == 0) { company = null; area = null; }
-      if (target == 1) { company = value ?? company; area = null; }
+      if (target == 0) {
+        company = null; area = null; treeAreas = []; treeMachines.clear(); expandedTreeAreas.clear();
+      }
+      if (target == 1) {
+        final previousCompany = company?['id_empresa'];
+        company = value ?? company; area = null;
+        if (previousCompany != company?['id_empresa']) {
+          treeAreas = []; treeMachines.clear(); expandedTreeAreas.clear();
+        }
+      }
       if (target == 2) area = value;
       items = []; query = ''; search.clear();
     });
     load();
+    if (target == 1 && company != null) loadTreeAreas();
+  }
+
+  Future<void> loadTreeAreas() async {
+    final selectedCompany = company?['id_empresa'];
+    if (selectedCompany == null || treeLoading) return;
+    setState(() => treeLoading = true);
+    try {
+      final result = await Api.request('/api/empresas/$selectedCompany/areas');
+      if (!mounted || company?['id_empresa'] != selectedCompany) return;
+      setState(() => treeAreas = result as List);
+    } catch (_) {
+      // La vista principal muestra los errores de red; el árbol puede reintentarse.
+    } finally {
+      if (mounted) setState(() => treeLoading = false);
+    }
+  }
+
+  Future<void> toggleTreeArea(Map<String, dynamic> selectedArea) async {
+    final id = (selectedArea['id_area'] as num).toInt();
+    final opening = !expandedTreeAreas.contains(id);
+    setState(() {
+      if (opening) {
+        expandedTreeAreas.add(id);
+      } else {
+        expandedTreeAreas.remove(id);
+      }
+    });
+    navigate(2, selectedArea);
+    if (!opening || treeMachines.containsKey(id)) return;
+    await loadTreeMachines(id);
+  }
+
+  Future<void> loadTreeMachines(int areaId, {bool showError = true}) async {
+    try {
+      final result = await Api.request('/api/areas/$areaId/maquinas');
+      if (mounted && expandedTreeAreas.contains(areaId)) {
+        setState(() => treeMachines[areaId] = result as List);
+      }
+    } catch (e) {
+      if (mounted && showError) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  void openTreeMachine(Map<String, dynamic> machine) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PantallaMonitoreo(idMaquina: machine['id_maquina'].toString()),
+    )).then((_) { if (mounted) load(silent: true); });
   }
 
   Future<void> create({bool member = false, Map<String, dynamic>? machine}) async {
@@ -81,6 +145,14 @@ class _WorkspaceState extends State<Workspace> {
     if (result == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cambios guardados correctamente')));
       await load();
+      if (company != null) {
+        final openAreas = expandedTreeAreas.toList();
+        treeMachines.clear();
+        await loadTreeAreas();
+        for (final areaId in openAreas) {
+          await loadTreeMachines(areaId, showError: false);
+        }
+      }
     }
   }
 
@@ -88,10 +160,24 @@ class _WorkspaceState extends State<Workspace> {
     const Padding(padding: EdgeInsets.only(top: 14, bottom: 46), child: Brand()),
     const Text('ESPACIO DE TRABAJO', style: TextStyle(color: muted, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.4)),
     const SizedBox(height: 18),
-    if (installer) navItem('Empresas', Icons.business_outlined, level == 0, () => navigate(0)),
-    navItem('Áreas', Icons.grid_view_rounded, level == 1, company == null ? null : () => navigate(1)),
-    navItem('Máquinas', Icons.precision_manufacturing_outlined, level == 2, null),
-    const Spacer(),
+    Expanded(child: ListView(padding: EdgeInsets.zero, children: [
+      if (installer) navItem('Empresas', Icons.business_outlined, level == 0, () => navigate(0)),
+      if (company != null) ...[
+        treeItem(
+          label: 'Áreas', icon: Icons.grid_view_rounded, selected: level == 1,
+          expanded: areasTreeExpanded,
+          onTap: () {
+            setState(() => areasTreeExpanded = !areasTreeExpanded);
+            if (areasTreeExpanded) { navigate(1); loadTreeAreas(); }
+          },
+        ),
+        if (areasTreeExpanded) ...[
+          if (treeLoading && treeAreas.isEmpty)
+            const Padding(padding: EdgeInsets.fromLTRB(44, 10, 0, 14), child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
+          for (final rawArea in treeAreas) ...treeAreaNodes(Map<String, dynamic>.from(rawArea)),
+        ],
+      ],
+    ])),
     Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: canvas, borderRadius: BorderRadius.circular(14)), child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Icon(Icons.sensors_rounded, color: accent), SizedBox(height: 10),
       Text('Conecta tu operación', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
@@ -113,6 +199,45 @@ class _WorkspaceState extends State<Workspace> {
       leading: Icon(icon, size: 20, color: selected ? accent : muted),
       title: Text(label, style: TextStyle(fontSize: 13, color: selected ? accent : muted, fontWeight: selected ? FontWeight.w700 : FontWeight.w400))),
   ));
+
+  Widget treeItem({required String label, required IconData icon, required bool selected,
+    required VoidCallback onTap, bool? expanded, double indent = 0}) => Padding(
+    padding: EdgeInsets.only(left: indent, bottom: 4),
+    child: Material(
+      color: selected ? const Color(0xFFE8F4F0) : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      child: ListTile(
+        dense: true, minLeadingWidth: 20, horizontalTitleGap: 8,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10), onTap: onTap,
+        leading: Icon(icon, size: 19, color: selected ? accent : muted),
+        title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13, color: selected ? accent : muted, fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
+        trailing: expanded == null ? null : Icon(expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded, size: 18, color: muted),
+      ),
+    ),
+  );
+
+  List<Widget> treeAreaNodes(Map<String, dynamic> treeArea) {
+    final id = (treeArea['id_area'] as num).toInt();
+    final expanded = expandedTreeAreas.contains(id);
+    final machines = treeMachines[id];
+    return [
+      treeItem(
+        label: treeArea['nombre'].toString(), icon: Icons.account_tree_outlined,
+        selected: area?['id_area'] == id, expanded: expanded, indent: 12,
+        onTap: () => toggleTreeArea(treeArea),
+      ),
+      if (expanded && machines == null)
+        const Padding(padding: EdgeInsets.fromLTRB(52, 8, 0, 12), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))),
+      if (expanded && machines != null)
+        for (final rawMachine in machines)
+          treeItem(
+            label: rawMachine['nombre'].toString(), icon: Icons.precision_manufacturing_outlined,
+            selected: false, indent: 26,
+            onTap: () => openTreeMachine(Map<String, dynamic>.from(rawMachine)),
+          ),
+    ];
+  }
 
   Widget stat(String value, String label, IconData icon, Color color) => Container(
     constraints: const BoxConstraints(minWidth: 155), padding: const EdgeInsets.all(20),

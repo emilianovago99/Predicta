@@ -23,6 +23,7 @@ secrets.h
 backups/
 .env.production
 .envrc
+.device-credentials.json
 id_rsa
 id_ed25519
 *.sql.gz

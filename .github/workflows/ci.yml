@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt ruff
-      - run: ruff check --select E9,F63,F7,F82 main.py settings.py database.py security.py migrate.py admin.py tests
+      - run: ruff check --select E9,F63,F7,F82 main.py settings.py database.py security.py migrate.py admin.py notifications.py device_setup.py tests examples
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: bash -n scripts/backup_db.sh scripts/restore_db.sh
       - name: Validate production exposure and configuration

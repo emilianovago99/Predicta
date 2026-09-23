@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'services/api.dart';
 import 'ui/design.dart';
 import 'workspace.dart';
@@ -39,13 +40,15 @@ class _PantallaLoginState extends State<PantallaLogin> {
   Future<void> _restoreSession() async {
     try {
       await Api.initialize();
-      if (Api.client.token == null) return;
+      if (!kIsWeb && Api.client.token == null) return;
       final user = await Api.request('/api/me');
       if (mounted) {
         Navigator.of(context).pushReplacement(MaterialPageRoute(
           builder: (_) => Workspace(user: Map<String, dynamic>.from(user))));
       }
-    } catch (_) { await Api.logout(); }
+    } on ApiException catch (e) {
+      if (e.statusCode != 401 && mounted) setState(() => _error = 'No pudimos recuperar la sesión. Comprueba la conexión y recarga.');
+    }
     finally { if (mounted) setState(() => _busy = false); }
   }
 

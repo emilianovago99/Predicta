@@ -24,6 +24,7 @@ services:
     environment:
       APP_ENV: production
       DOMAIN: ${DOMAIN:?Set DOMAIN}
+      DEVICE_SERVER_URL: https://${DOMAIN:?Set DOMAIN}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       JWT_EXPIRES_SECONDS: ${JWT_EXPIRES_SECONDS:-3600}
       DB_HOST: mariadb

@@ -24,7 +24,7 @@ class PantallaMonitoreo extends StatefulWidget {
 class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   String estado = 'optimo';
   String nombre = 'Cargando datos...';
-  String diagnostico = 'Sin alertas recientes.';
+  Map<String, dynamic>? incident;
   String resumenAlerta = 'Sin alertas recientes.';
 
   double temperatura = 0.0;
@@ -55,7 +55,6 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   bool medirHum = true;
 
   String metricaActiva = 'Temp. motor';
-  String ultimaAlertaProcesada = '';
 
   String estadoPrediccion = 'Evaluando métricas...';
   int rulCiclos = -1;
@@ -150,70 +149,6 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
       temporizador!.cancel();
     }
     super.dispose();
-  }
-
-  void lanzarNotificacionPantalla(String mensajeAlerta, String tipoAlerta) {
-    Color colorBanner = Colors.orange.shade800;
-    IconData iconoBanner = Icons.analytics_outlined;
-
-    if (tipoAlerta == 'critico' || tipoAlerta == 'peligro') {
-      colorBanner = Colors.red.shade800;
-      iconoBanner = Icons.report_problem_rounded;
-    }
-    if (tipoAlerta == 'evento') {
-      colorBanner = Colors.deepPurple.shade700;
-      iconoBanner = Icons.bolt_rounded;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(iconoBanner, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '${tipoAlerta.toUpperCase()} · $nombre (${widget.idMaquina})',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  Text(
-                    mensajeAlerta,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: colorBanner,
-        duration: const Duration(seconds: 5),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
-  }
-
-  String _resumenParaPantalla(String tipoAlerta) {
-    switch (tipoAlerta) {
-      case 'critico':
-      case 'peligro':
-        return 'Se detectó una condición crítica. Revisa las métricas de la máquina.';
-      case 'evento':
-        return 'Se detectó un cambio brusco. Revisa el estado de la máquina.';
-      case 'predictivo':
-        return 'Se anticipó una condición de riesgo. Programa una revisión preventiva.';
-      case 'alerta':
-        return 'Se detectó una condición de alerta. Revisa las métricas de la máquina.';
-      default:
-        return 'Se detectó una alerta. Revisa las métricas de la máquina.';
-    }
   }
 
   Future<void> obtenerPrediccionML() async {
@@ -311,24 +246,8 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
             medirHum = false;
           }
 
-          if (data['ultima_alerta'] != null) {
-            diagnostico = data['ultima_alerta']['diagnostico'];
-            String tipoAlertaUi = estado;
-            if (data['ultima_alerta']['tipo'] != null) {
-              tipoAlertaUi = data['ultima_alerta']['tipo'].toString();
-            }
-            resumenAlerta = _resumenParaPantalla(tipoAlertaUi);
-            if (ultimaAlertaProcesada != diagnostico) {
-              ultimaAlertaProcesada = diagnostico;
-              lanzarNotificacionPantalla(resumenAlerta, tipoAlertaUi);
-            }
-          }
-
-          if (data['ultima_alerta'] == null) {
-            diagnostico = 'Sin alertas recientes.';
-            resumenAlerta = 'Sin alertas recientes.';
-            ultimaAlertaProcesada = '';
-          }
+          incident = data['ultima_alerta'] == null ? null : Map<String, dynamic>.from(data['ultima_alerta']);
+          resumenAlerta = incident?['action'] ?? 'Sin alertas recientes.';
 
           if (history.isNotEmpty && lecturaReciente != null) {
               temperatura = _asDouble(lecturaReciente['temperatura']);
@@ -967,13 +886,14 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   }
 
   Widget _panelAlerta() {
-    if (estado != 'peligro' && estado != 'alerta') return const SizedBox.shrink();
+    if (incident == null) return const SizedBox.shrink();
 
-    final isDanger = estado == 'peligro';
-    final color = isDanger ? const Color(0xFFCE4B51) : const Color(0xFFAE7419);
-    final background = isDanger ? const Color(0xFFFFF1F3) : const Color(0xFFFFF6E7);
-    final icon = isDanger ? Icons.warning_rounded : Icons.warning_amber_rounded;
-    final title = isDanger ? 'ALERTA DETECTADA' : 'PRECAUCIÓN';
+    final isDanger = incident!['severity'] == 2;
+    final resolved = incident!['active'] == false;
+    final color = resolved ? accent : isDanger ? const Color(0xFFCE4B51) : const Color(0xFFAE7419);
+    final background = resolved ? const Color(0xFFE8F4F0) : isDanger ? const Color(0xFFFFF1F3) : const Color(0xFFFFF6E7);
+    final icon = resolved ? Icons.check_circle_outline : isDanger ? Icons.warning_rounded : Icons.warning_amber_rounded;
+    final title = incident!['title'] as String;
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -1008,7 +928,12 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     color: color,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 10),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final metric in (incident!['metrics'] as List? ?? []))
+                    StatusPill("${metric['label']}: ${metric['value']} ${metric['unit']} · límite ${metric['limit']}", color: color),
+                ]),
+                const SizedBox(height: 8),
                 Text(
                   resumenAlerta,
                   style: const TextStyle(fontSize: 14, color: ink, height: 1.45),

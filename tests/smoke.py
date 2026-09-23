@@ -89,3 +89,55 @@ request(f'/api/maquinas/{machine_id}/config', config, method='PUT', expected=403
 USER_TOKEN = None
 request('/api/empresas', expected=401)
 print('OK: JWT, company isolation, roles, device rotation, concurrent deduplication, restart identity.')
+
+# Cookie session survives a new page/request, without exposing JWT to storage.
+from http.cookiejar import CookieJar
+from urllib.request import build_opener, HTTPCookieProcessor
+session = build_opener(HTTPCookieProcessor(CookieJar()))
+login = session.open(Request(BASE + '/api/login', data=json.dumps({'email': os.environ['TEST_EMAIL'], 'password': os.environ['TEST_PASSWORD']}).encode(), headers={'Content-Type': 'application/json'}))
+assert login.status == 200
+assert 'HttpOnly' in login.headers['Set-Cookie'] and 'SameSite=lax' in login.headers['Set-Cookie']
+assert session.open(BASE + '/api/me').status == 200
+assert session.open(Request(BASE + '/api/logout', method='POST', headers={'Origin': 'http://localhost:8088'})).status == 200
+try:
+    session.open(BASE + '/api/me')
+    raise AssertionError('Cookie session not cleared')
+except HTTPError as error:
+    assert error.code == 401
+
+USER_TOKEN = admin_token
+channel = request('/api/telegram/channels', {'id_empresa': company['id_empresa'], 'nombre': 'Test destination',
+                  'bot_token': '123456789:' + 'x'*32, 'chat_id': '-100123456789'})
+settings = {'channel_id': channel['id'], 'cooldown_seconds': 900}
+request(f'/api/maquinas/{machine_id}/notifications', settings, method='PUT')
+request('/api/maquinas/M-01/notifications', settings, method='PUT', expected=403)
+second = machine_id + '-B'
+request('/api/maquinas', {**machine, 'id_maquina': second})
+request(f'/api/maquinas/{second}/notifications', settings, method='PUT')
+for mid in (machine_id, second):
+    result = request(f'/api/maquinas/{mid}/notifications')
+    assert result['channel_id'] == channel['id']
+    assert 'token' not in json.dumps(result)
+USER_TOKEN = boss['access_token']
+request(f'/api/maquinas/{machine_id}/installation', {}, expected=403)
+USER_TOKEN = reader['access_token']
+request(f'/api/maquinas/{machine_id}/notifications', expected=403)
+USER_TOKEN = admin_token
+installation = request(f'/api/maquinas/{second}/installation', {'server_url': 'http://predicta.planta:8088'})
+USER_TOKEN = installation['enrollment_code']
+enrolled = request('/api/device/enroll', {})
+request('/api/device/enroll', {}, expected=401)
+USER_TOKEN = admin_token
+DEVICE_KEY = enrolled['device_api_key']
+normal = {**payload, 'id_maquina': second, 'boot_id': 'installation-test'}
+for sequence in range(3):
+    request('/api/sensores', {**normal, 'temperatura': 100, 'sequence': sequence})
+incident = request(f'/api/maquinas/{second}/datos')['ultima_alerta']
+assert incident['severity'] == 2 and incident['occurrences'] == 3
+assert incident['metrics'][0]['label'] == 'Motor'
+assert 'diagnostico' not in incident
+assert request(f'/api/maquinas/{second}/installation')['connected'] is True
+for sequence in range(3, 8):
+    request('/api/sensores', {**normal, 'sequence': sequence})
+assert request(f'/api/maquinas/{second}/datos')['ultima_alerta']['active'] is False
+print('OK: cookie reload/logout, shared Telegram routing, tenant isolation, one-use enrollment, grouped alerts and recovery.')

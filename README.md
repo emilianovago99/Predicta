@@ -6,6 +6,8 @@ ML de mantenimiento y chat Mecanimal. Gemini/Telegram son opcionales.
 
 ## Inicio local
 
+Guía del nuevo flujo: [sensores, instalación y Telegram](docs/SENSORES_E_INSTALACION.md).
+
 **El entorno de trabajo actual es local:** http://localhost:8088. No necesitas
 DOMAIN, ACME_EMAIL, Caddy ni certificados. La configuración de producción queda
 separada en `docker-compose.prod.yml` para más adelante.
@@ -26,7 +28,7 @@ Para editar Flutter con recarga rápida, deja Docker activo y usa otra terminal:
 
 ```powershell
 cd mantenimiento_predictivo
-flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://127.0.0.1:8000
+flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://localhost:8000
 ```
 
 Para Android emulador usa `--dart-define=API_BASE_URL=http://10.0.2.2:8000`.

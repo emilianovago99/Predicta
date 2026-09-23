@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
+import 'http_client.dart';
 
 class ApiException implements Exception {
   final String message;
@@ -28,7 +29,7 @@ class ApiClient {
   Future<void> Function()? clearStoredToken;
   ApiClient({http.Client? client, Uri Function(String)? resolve,
     this.timeout = const Duration(seconds: 40)})
-      : client = client ?? http.Client(), resolve = resolve ?? ApiConfig.uri;
+      : client = client ?? createHttpClient(), resolve = resolve ?? ApiConfig.uri;
 
   Future<dynamic> request(String path, {Map<String, dynamic>? body, bool put = false}) async {
     try {
@@ -78,6 +79,7 @@ class Api {
     client.token = token;
   }
   static Future<void> logout() async {
+    try { await client.request('/api/logout', body: {}); } catch (_) { /* Expired sessions are already invalid. */ }
     client.token = null;
     await client.clearStoredToken?.call();
   }

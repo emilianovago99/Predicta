@@ -6,6 +6,7 @@ import 'config/api_config.dart';
 import 'services/api.dart';
 import 'ui/design.dart';
 import 'pantalla_monitoreo.dart';
+import 'machine_setup.dart';
 
 const sensorLabels = {
   'temp': 'Temperatura del motor', 'temp_amb': 'Temperatura ambiente',
@@ -267,7 +268,9 @@ class _WorkspaceState extends State<Workspace> {
     return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: open, hoverColor: accent.withValues(alpha: .025), child: Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: canvas, borderRadius: BorderRadius.circular(13)),
         child: Icon([Icons.business_outlined, Icons.layers_outlined, Icons.precision_manufacturing_outlined][level], color: ink, size: 24)),
-        const Spacer(), if (isMachine && canEdit) IconButton(tooltip: 'Configurar sensores y umbrales', onPressed: () => create(machine: item), icon: const Icon(Icons.tune_rounded, color: muted, size: 20))
+        const Spacer(),
+        if (isMachine && canEdit) IconButton(tooltip: 'Telegram e instalación', onPressed: () => showDialog(context: context, builder: (_) => MachineSetup(machineId: item['id_maquina'], installer: installer)), icon: const Icon(Icons.cable_rounded, color: accent, size: 20)),
+        if (isMachine && canEdit) IconButton(tooltip: 'Configurar sensores y umbrales', onPressed: () => create(machine: item), icon: const Icon(Icons.tune_rounded, color: muted, size: 20))
         else const Icon(Icons.north_east_rounded, color: muted, size: 19),
       ]),
       const SizedBox(height: 22), Text(item['nombre'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: -.3)),

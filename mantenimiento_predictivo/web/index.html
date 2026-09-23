@@ -18,7 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Predicta: monitoreo y mantenimiento predictivo industrial.">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -33,6 +33,28 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // Remove old Flutter workers/caches before loading the current authenticated client.
+    // Old workers can otherwise serve JavaScript from before JWT was introduced.
+    (async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const scope = new URL('.', document.baseURI).href;
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.filter(r => r.scope === scope).map(r => r.unregister()));
+        }
+        if ('caches' in window) {
+          await Promise.all(['flutter-app-cache', 'flutter-temp-cache', 'flutter-app-manifest']
+            .map(name => caches.delete(name)));
+        }
+      } catch (error) {
+        console.warn('No se pudo limpiar la caché anterior de Flutter.', error);
+      }
+      const script = document.createElement('script');
+      script.src = 'flutter_bootstrap.js?release=' + Date.now();
+      script.async = true;
+      document.body.appendChild(script);
+    })();
+  </script>
 </body>
 </html>

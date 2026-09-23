@@ -3,7 +3,7 @@ WORKDIR /app
 COPY mantenimiento_predictivo/pubspec.* ./
 RUN flutter pub get
 COPY mantenimiento_predictivo/ ./
-RUN flutter build web --release --no-web-resources-cdn
+RUN flutter build web --release --no-web-resources-cdn --pwa-strategy=none
 
 FROM nginx:1.28-alpine
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

@@ -17,7 +17,13 @@ class ApiClient {
   final http.Client client;
   final Uri Function(String) resolve;
   final Duration timeout;
-  String? token;
+  String? _token;
+  bool _unauthorizedNotified = false;
+  String? get token => _token;
+  set token(String? value) {
+    _token = value;
+    if (value != null) _unauthorizedNotified = false;
+  }
   VoidCallback? onUnauthorized;
   Future<void> Function()? clearStoredToken;
   ApiClient({http.Client? client, Uri Function(String)? resolve,
@@ -34,7 +40,8 @@ class ApiClient {
           : put ? client.put(uri, headers: headers, body: jsonEncode(body))
           : client.post(uri, headers: headers, body: jsonEncode(body))).timeout(timeout);
       if (response.statusCode == 401) {
-        if (path != '/api/login' && sentToken != null && sentToken == token) {
+        if (path != '/api/login' && sentToken == token && !_unauthorizedNotified) {
+          _unauthorizedNotified = true;
           token = null;
           await clearStoredToken?.call();
           onUnauthorized?.call();

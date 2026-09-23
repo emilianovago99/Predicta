@@ -1,6 +1,24 @@
 # Validación realizada — 2026-09-23
 
-## Comprobaciones satisfactorias
+## Ajuste local posterior — 2026-09-23
+
+- `scripts/start_local.ps1` ejecutado: reconstrucción de API/web y los tres
+  contenedores `hack` saludables, conservando el volumen de MariaDB.
+- `/api/health` devuelve `ok` tanto en 8000 como por Nginx en 8088.
+- Preflight CORS desde `http://localhost:5173`: 200 y origen permitido.
+- `flutter analyze`: sin incidencias. `flutter test`: seis pruebas aprobadas.
+- Build web con `--pwa-strategy=none`: completado.
+- Edge headless contra localhost:8088: login real y GET empresas con Bearer/200.
+- Migración de caché en un proxy local de prueba: el worker heredado de Flutter
+  servía JavaScript obsoleto; el nuevo index lo eliminó y permitió login/empresas.
+- Respuesta 401 simulada en el navegador: regreso al login verificado.
+- Sintaxis del script PowerShell y `git diff --check`: sin errores.
+
+Se ajustó el `.env` local ignorado por Git y se verificaron las credenciales de
+la base existente. No se borraron datos ni se cambiaron contraseñas en MariaDB.
+No se ejecutó el Compose de producción ni se publicó la aplicación.
+
+## Comprobaciones de la preparación inicial
 
 | Comprobación | Resultado observado |
 |---|---|
@@ -37,8 +55,9 @@ prueba se detuvieron; se conservaron, sin borrar, los volúmenes:
 - predicta-test-6bc97b9b_mariadb_data
 - predicta-test-b387e1e7_mariadb_data
 
-No se reiniciaron ni migraron los contenedores hack/lamp que ya estaban en marcha.
-El `.env` original no se modificó. Los secrets de test fueron efímeros y no se
+En la preparación inicial no se reiniciaron ni migraron los contenedores
+hack/lamp que ya estaban en marcha y el `.env` original no se modificó.
+Los secrets de test fueron efímeros y no se
 incorporaron al código ni se usaron como credenciales de producción.
 
 ## Limitaciones y avisos observados

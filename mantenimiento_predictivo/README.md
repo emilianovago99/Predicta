@@ -7,7 +7,7 @@ flutter pub get --enforce-lockfile
 flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://127.0.0.1:8000
 flutter analyze
 flutter test
-flutter build web --release --no-web-resources-cdn
+flutter build web --release --no-web-resources-cdn --pwa-strategy=none
 flutter build apk --release --dart-define=API_BASE_URL=https://TU_DOMINIO
 flutter build appbundle --release --dart-define=API_BASE_URL=https://TU_DOMINIO
 ```

@@ -6,6 +6,34 @@ ML de mantenimiento y chat Mecanimal. Gemini/Telegram son opcionales.
 
 ## Inicio local
 
+**El entorno de trabajo actual es local:** http://localhost:8088. No necesitas
+DOMAIN, ACME_EMAIL, Caddy ni certificados. La configuración de producción queda
+separada en `docker-compose.prod.yml` para más adelante.
+
+En Windows, con `.env` configurado, el comando habitual desde la raíz es:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_local.ps1
+```
+
+Reconstruye API/web, espera los healthchecks y verifica `/api/health` por Nginx.
+Así se evita ejecutar una web antigua después de cambiar el código. Conserva los
+usuarios, contraseñas, JWT y permisos también en local. Si tenías la app abierta
+antes de actualizar, recarga la pestaña e inicia sesión otra vez. La web limpia
+las cachés antiguas de Flutter al arrancar y se compila sin caché offline.
+
+Para editar Flutter con recarga rápida, deja Docker activo y usa otra terminal:
+
+```powershell
+cd mantenimiento_predictivo
+flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://127.0.0.1:8000
+```
+
+Para Android emulador usa `--dart-define=API_BASE_URL=http://10.0.2.2:8000`.
+El archivo `.env` de Flutter no contiene secretos del backend ni se carga solo.
+
+Pasos manuales y primera instalación:
+
 1. Crear `.env` desde `.env.example` **solo si no existe**. Completar DB_PASSWORD,
    DB_ROOT_PASSWORD y JWT_SECRET (mínimo 32 caracteres aleatorios).
 2. Ejecutar desde la raíz:
@@ -23,8 +51,15 @@ docker compose exec api python admin.py create-installer --email TU_EMAIL --name
 
 ```bash
 docker compose exec api python admin.py rotate-device-key --machine M-01
-docker compose --profile demo up -d simulator
+docker compose --profile demo up -d --build simulator
 ```
+
+Si ya configuraste una clave válida, no necesitas volver a generarla. Al cambiar
+el código del simulador usa `--build`: reiniciar el contenedor no actualiza su
+imagen. Un simulador antiguo puede enviar lecturas sin credencial y recibir 401.
+Abre la máquina `M-01` para ver el monitoreo, que consulta datos cada 2 segundos.
+El simulador ejecuta 40 ciclos (aproximadamente 80 segundos) y termina; para
+repetir la demostración ejecuta de nuevo el comando anterior.
 
 Roles conservados: instalador administra empresas; jefe gestiona su empresa;
 participante consulta y usa chat. Las comprobaciones se ejecutan también en API.
@@ -57,7 +92,7 @@ cd mantenimiento_predictivo
 flutter pub get --enforce-lockfile
 flutter analyze
 flutter test
-flutter build web --release --no-web-resources-cdn
+flutter build web --release --no-web-resources-cdn --pwa-strategy=none
 ```
 
 `tests/run_stack.py` construye un proyecto Docker aislado y conserva su volumen de

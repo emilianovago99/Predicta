@@ -43,6 +43,13 @@ usar las credenciales actuales o cambiarlas explícitamente con un administrador
 
 ## Desarrollo exacto
 
+Este es el entorno de trabajo actual. En Windows también puedes ejecutar
+`powershell -ExecutionPolicy Bypass -File .\scripts\start_local.ps1` desde la raíz:
+reconstruye el cliente y la API, levanta solo el Compose local y verifica health.
+Con DEVICE_API_KEY configurada, `-Demo` inicia además el simulador.
+La web elimina cachés antiguas de Flutter y se construye con `--pwa-strategy=none`
+para evitar clientes previos a JWT. Una sesión ausente/vencida vuelve al login.
+
 Desde la raíz, crear `.env` si aún no existe y completar DB_PASSWORD,
 DB_ROOT_PASSWORD y JWT_SECRET. Mantener las integraciones externas opcionales vacías.
 
@@ -62,7 +69,7 @@ Para el simulador de M-01:
 ```bash
 docker compose exec api python admin.py rotate-device-key --machine M-01
 # Guardar el valor mostrado UNA VEZ en DEVICE_API_KEY dentro de .env.
-docker compose --profile demo up -d simulator
+docker compose --profile demo up -d --build simulator
 docker compose logs -f simulator
 ```
 
@@ -303,7 +310,7 @@ cd mantenimiento_predictivo
 flutter pub get --enforce-lockfile
 flutter analyze
 flutter test
-flutter build web --release --no-web-resources-cdn
+flutter build web --release --no-web-resources-cdn --pwa-strategy=none
 flutter build apk --release --dart-define=API_BASE_URL=https://TU_DOMINIO
 flutter build appbundle --release --dart-define=API_BASE_URL=https://TU_DOMINIO
 # En macOS con Xcode y firma configurados:

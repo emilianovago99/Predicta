@@ -38,6 +38,31 @@ void main() {
       expect(api.token, 'valid');
     }
   });
+  test('missing token returns to login once instead of leaving a broken workspace', () async {
+    var expired = 0;
+    final api = make((_) async => http.Response('unauthorized', 401))
+      ..onUnauthorized = () { expired++; };
+    for (var i = 0; i < 2; i++) {
+      await expectLater(api.request('/api/empresas'), throwsA(isA<ApiException>()));
+    }
+    expect(expired, 1);
+    api.token = 'new-session';
+    await expectLater(api.request('/api/empresas'), throwsA(isA<ApiException>()));
+    expect(expired, 2);
+  });
+  test('late 401 does not invalidate a newer login', () async {
+    final pending = Completer<http.Response>();
+    var expired = false;
+    final api = make((_) => pending.future)
+      ..token = 'old-session'
+      ..onUnauthorized = () { expired = true; };
+    final request = api.request('/api/me');
+    api.token = 'new-session';
+    pending.complete(http.Response('', 401));
+    await expectLater(request, throwsA(isA<ApiException>()));
+    expect(api.token, 'new-session');
+    expect(expired, false);
+  });
   test('timeout becomes a user-facing API error', () async {
     final api = make((_) async => throw TimeoutException('internal'));
     await expectLater(api.request('/api/me'), throwsA(isA<ApiException>()

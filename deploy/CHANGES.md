@@ -1,6 +1,23 @@
 # Archivos creados/modificados
 
-54 archivos; sin commits ni deploy real. No se modificaron los valores de `.env` existentes.
+## Ajuste posterior para trabajo local
+
+- `scripts/start_local.ps1`: reconstruye e inicia el Compose de desarrollo, espera
+  los healthchecks y comprueba la API a través de Nginx; `-Demo` es opcional.
+- `mantenimiento_predictivo/web/index.html`: retira workers y cachés antiguas de
+  Flutter antes de cargar el cliente actual. Docker/CI compilan sin caché offline.
+- `mantenimiento_predictivo/lib/services/api.dart`: una respuesta 401 sin token
+  también vuelve al login, sin duplicar avisos ni invalidar una sesión más nueva.
+  Se añadieron dos pruebas de regresión.
+- README y guía de despliegue: arranque local y Flutter con recarga rápida.
+- `.env` local (ignorado por Git): puertos loopback, CORS local y credenciales de
+  MariaDB verificadas contra el volumen existente. No se borraron datos ni se
+  cambiaron contraseñas en MariaDB. Producción conserva su Compose separado.
+
+## Preparación inicial de producción
+
+54 archivos en la preparación inicial; no se realizó deploy público. En esa fase
+no se modificaron los valores de `.env` existentes.
 
 | Archivo | Cambio |
 |---|---|

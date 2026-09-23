@@ -1,0 +1,21 @@
+{
+	email {$ACME_EMAIL}
+}
+{$DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+	reverse_proxy web:80
+}
+# Container-only health probe, never published on the host.
+http://:8080 {
+	handle /health {
+		rewrite * /api/health
+		reverse_proxy web:80
+	}
+}

@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  flutter_secure_storage: ^9.2.4
   syncfusion_flutter_charts: ^33.2.8
   syncfusion_flutter_gauges: ^33.2.8
 

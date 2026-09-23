@@ -10,17 +10,11 @@
 --    · Índice en Alertas para consultas rápidas del dashboard
 -- =========================================================
 
-DROP TABLE IF EXISTS Alertas;
-DROP TABLE IF EXISTS SensorData;
-DROP TABLE IF EXISTS Maquina;
-DROP TABLE IF EXISTS Area;
-DROP TABLE IF EXISTS Usuario;
-DROP TABLE IF EXISTS Empresa;
 
 -- ─────────────────────────────────────────────────────────
 -- EMPRESA
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE Empresa (
+CREATE TABLE IF NOT EXISTS Empresa (
     id_empresa     INT AUTO_INCREMENT PRIMARY KEY,
     nombre         VARCHAR(100) NOT NULL,
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -29,12 +23,12 @@ CREATE TABLE Empresa (
 -- ─────────────────────────────────────────────────────────
 -- USUARIO
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE Usuario (
+CREATE TABLE IF NOT EXISTS Usuario (
     id_usuario    INT AUTO_INCREMENT PRIMARY KEY,
     id_empresa    INT NOT NULL,
     nombre        VARCHAR(100) NOT NULL,
     email         VARCHAR(100) UNIQUE NOT NULL,
-    -- En producción: almacenar aquí el hash bcrypt, nunca texto plano
+    -- PBKDF2 SHA-256 con salt individual; nunca texto plano
     password_hash VARCHAR(255) NOT NULL,
     rol           ENUM('instalador', 'jefe', 'participante') NOT NULL,
     FOREIGN KEY (id_empresa) REFERENCES Empresa(id_empresa) ON DELETE CASCADE
@@ -43,7 +37,7 @@ CREATE TABLE Usuario (
 -- ─────────────────────────────────────────────────────────
 -- ÁREA
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE Area (
+CREATE TABLE IF NOT EXISTS Area (
     id_area    INT AUTO_INCREMENT PRIMARY KEY,
     id_empresa INT NOT NULL,
     nombre     VARCHAR(100) NOT NULL,
@@ -53,7 +47,7 @@ CREATE TABLE Area (
 -- ─────────────────────────────────────────────────────────
 -- MÁQUINA
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE Maquina (
+CREATE TABLE IF NOT EXISTS Maquina (
     id_maquina   VARCHAR(50) PRIMARY KEY,
     id_area      INT NOT NULL,
     nombre       VARCHAR(100) NOT NULL,
@@ -87,7 +81,7 @@ CREATE TABLE Maquina (
 -- ─────────────────────────────────────────────────────────
 -- SENSOR DATA  (tabla de mayor volumen → índices críticos)
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE SensorData (
+CREATE TABLE IF NOT EXISTS SensorData (
     id_data    BIGINT AUTO_INCREMENT PRIMARY KEY,
     id_maquina VARCHAR(50) NOT NULL,
 
@@ -117,15 +111,15 @@ CREATE TABLE SensorData (
 
 -- Índice compuesto: clave para consultas de historial y re-entrenamiento ML
 -- Cubre: WHERE id_maquina = X ORDER BY fecha DESC
-CREATE INDEX idx_sensor_maquina_fecha ON SensorData (id_maquina, fecha);
+CREATE INDEX IF NOT EXISTS idx_sensor_maquina_fecha ON SensorData (id_maquina, fecha);
 
 -- Índice extra para COUNT rápido por máquina (usado en trigger de re-entrenamiento)
-CREATE INDEX idx_sensor_maquina      ON SensorData (id_maquina);
+CREATE INDEX IF NOT EXISTS idx_sensor_maquina      ON SensorData (id_maquina);
 
 -- ─────────────────────────────────────────────────────────
 -- ALERTAS
 -- ─────────────────────────────────────────────────────────
-CREATE TABLE Alertas (
+CREATE TABLE IF NOT EXISTS Alertas (
     id_alerta  INT AUTO_INCREMENT PRIMARY KEY,
     id_maquina VARCHAR(50) NOT NULL,
     riesgo     FLOAT NOT NULL,
@@ -138,7 +132,7 @@ CREATE TABLE Alertas (
 );
 
 -- Índice para el dashboard: alertas recientes por máquina
-CREATE INDEX idx_alertas_maquina_fecha ON Alertas (id_maquina, fecha);
+CREATE INDEX IF NOT EXISTS idx_alertas_maquina_fecha ON Alertas (id_maquina, fecha);
 
 -- ─────────────────────────────────────────────────────────
 -- DATOS INICIALES
@@ -151,11 +145,5 @@ INSERT INTO Area (id_empresa, nombre) VALUES (2, 'Linea de Motores');
 INSERT INTO Maquina (id_maquina, id_area, nombre, estado)
     VALUES ('M-01', 1, 'Motor Principal', 'optimo');
 
--- ADVERTENCIA: passwords en texto plano solo para desarrollo local.
--- En producción reemplazar por hashes bcrypt antes del primer deploy.
-INSERT INTO Usuario (id_empresa, nombre, email, password_hash, rol)
-    VALUES (1, 'Equipo Predicta',  'admin@predicta.com',  'root',          'instalador');
-INSERT INTO Usuario (id_empresa, nombre, email, password_hash, rol)
-    VALUES (2, 'Emiliano Valdez',     'jefe@predicta.com',   'hackatec2026',  'jefe');
-INSERT INTO Usuario (id_empresa, nombre, email, password_hash, rol)
-    VALUES (2, 'Técnico de Planta',   'tecnico@predicta.com','1234',          'participante');
+
+-- Crear usuarios con admin.py; no hay contraseñas predeterminadas.

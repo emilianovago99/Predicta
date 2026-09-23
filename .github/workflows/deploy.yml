@@ -1,0 +1,58 @@
+name: Deploy Ubuntu
+on:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: predicta-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      PRODUCTION_ENV: ${{ secrets.PRODUCTION_ENV }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare credentials without printing secrets
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$PRODUCTION_ENV" > "$RUNNER_TEMP/.env.production"
+          test -s ~/.ssh/id_ed25519
+          test -s ~/.ssh/known_hosts
+          test -s "$RUNNER_TEMP/.env.production"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/release.tar.gz" "$GITHUB_SHA"
+      - name: Transfer exact revision and start production Compose
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z0-9_-]+$ ]]
+          remote="$DEPLOY_USER@$DEPLOY_HOST"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$remote" "umask 077; mkdir -p /opt/predicta/releases/$GITHUB_SHA"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes "$RUNNER_TEMP/release.tar.gz" "$remote:/opt/predicta/releases/$GITHUB_SHA/release.tar.gz"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes "$RUNNER_TEMP/.env.production" "$remote:/opt/predicta/releases/$GITHUB_SHA/.env.production"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$remote" bash -s -- "$GITHUB_SHA" <<'REMOTE'
+          set -euo pipefail
+          cd "/opt/predicta/releases/$1"
+          tar -xzf release.tar.gz
+          chmod 600 .env.production
+          docker compose --env-file .env.production -f docker-compose.prod.yml config --quiet
+          docker compose --env-file .env.production -f docker-compose.prod.yml build
+          # Preserve a pre-migration backup on updates; skip only on the first deploy.
+          if test -L /opt/predicta/current; then
+            (cd /opt/predicta/current; BACKUP_DIR=/opt/predicta/backups bash scripts/backup_db.sh)
+          fi
+          docker compose --env-file .env.production -f docker-compose.prod.yml up -d --wait --wait-timeout 240
+          ln -sfn "/opt/predicta/releases/$1" /opt/predicta/current
+          REMOTE
+      - name: Remove runner credential files
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 "$RUNNER_TEMP/.env.production"

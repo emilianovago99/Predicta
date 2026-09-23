@@ -39,12 +39,12 @@ class LogicTests(unittest.TestCase):
         self.assertFalse(result['requiere_alerta_preventiva'])
         self.assertEqual(result['rul_ciclos'], -1)
 
-    def test_password_hash_and_legacy_login(self):
+    def test_password_hash_and_plaintext_rejection(self):
         hashed = main.hash_password('test-password')
         self.assertNotIn('test-password', hashed)
         self.assertTrue(main.verify_password('test-password', hashed))
         self.assertFalse(main.verify_password('wrong', hashed))
-        self.assertTrue(main.verify_password('root', 'root'))
+        self.assertFalse(main.verify_password('legacy', 'legacy'))
 
     def test_company_rolls_back_when_email_exists(self):
         db = MagicMock()
@@ -64,7 +64,7 @@ class LogicTests(unittest.TestCase):
         db.cursor.return_value.fetchone.return_value = None
         with patch.object(main, 'conectar_db', return_value=db):
             with self.assertRaises(main.HTTPException) as error:
-                main.registrar_telemetria(main.Telemetria(maquina_id='MISSING', **self.row))
+                main.registrar_telemetria(main.Telemetria(maquina_id='MISSING', **self.row), {'id_maquina': 'MISSING'})
         self.assertEqual(error.exception.status_code, 404)
 
 

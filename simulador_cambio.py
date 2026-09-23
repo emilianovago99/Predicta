@@ -2,6 +2,7 @@ import time
 import random
 import requests
 import os
+import uuid
 import numpy as np
 from collections import deque
 from dotenv import load_dotenv
@@ -19,6 +20,9 @@ if api_key:
 class NodoEdge:
     def __init__(self, maquina_id):
         self.maquina_id = maquina_id
+        self.headers = {"Authorization": "Bearer " + os.environ["DEVICE_API_KEY"]}
+        self.boot_id = uuid.uuid4().hex
+        self.sequence = 0
         api_base = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
         api_base_str = str(api_base)
         api_base_clean = api_base_str.rstrip("/")
@@ -55,7 +59,8 @@ class NodoEdge:
     def _cargar_limites_desde_api(self):
         try:
             url = f"{self.api_base}/api/maquinas/{self.maquina_id}/config"
-            resp = requests.get(url, timeout=4)
+            resp = requests.get(url, headers=self.headers, timeout=4)
+            resp.raise_for_status()
             if resp.status_code == 200:
                 cfg = resp.json()
                 self.temp_alerta = float(cfg["temp_alerta"])
@@ -173,15 +178,17 @@ class NodoEdge:
         score_riesgo = self._calcular_score_riesgo(datos, features, anomalia_if, score_if)
         ciclos_alerta, metrica = self._proyectar_ciclos_preventivo(datos, features)
 
+        self.sequence += 1
         payload = {
+            "sequence": self.sequence, "boot_id": self.boot_id, "firmware_version": "simulator-change-3",
             "maquina_id": self.maquina_id, "voltaje": datos["voltaje"], "temperatura": datos["temperatura"],
             "temp_ambiente": datos.get("temp_ambiente", self.temp_amb_actual), "vibracion": datos["vibracion"],
             "velocidad": datos["velocidad"], "humedad": datos["humedad"], "temp_media": features["temp_media"],
             "temp_std": features["temp_std"], "temp_delta": features["temp_delta"], "vib_media": features["vib_media"],
             "vib_delta": features["vib_delta"], "score_riesgo_edge": score_riesgo,
         }
-        try: requests.post(self.url_sensores, json=payload, timeout=5)
-        except: pass
+        try: requests.post(self.url_sensores, headers=self.headers, json=payload, timeout=5).raise_for_status()
+        except requests.exceptions.RequestException as exc: print(f"[Edge] Error de comunicación: {exc}")
 
         if score_riesgo >= 70.0:
             self.generar_alerta_gemini(datos, features, score_riesgo, "critico")
@@ -192,11 +199,11 @@ class NodoEdge:
 
     def generar_alerta_gemini(self, datos, features, score_riesgo, tipo, ciclos=9999, metrica=""):
         payload = {"maquina_id": self.maquina_id, "riesgo": score_riesgo, "diagnostico": f"Alerta {tipo}: T={datos['temperatura']} V={datos['vibracion']}"}
-        try: requests.post(self.url_alertas, json=payload, timeout=5)
-        except: pass
+        try: requests.post(self.url_alertas, headers=self.headers, json=payload, timeout=5).raise_for_status()
+        except requests.exceptions.RequestException as exc: print(f"[Edge] Error de comunicación: {exc}")
 
 if __name__ == "__main__":
-    nodo = NodoEdge(maquina_id="M-01")
+    nodo = NodoEdge(maquina_id=os.getenv("MACHINE_ID", "M-01"))
     for i in range(1, 30):
         print(f"--- Ciclo {i} ---")
         lectura = nodo.leer_sensores(i)

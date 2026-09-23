@@ -2,6 +2,7 @@ import time
 import random
 import requests
 import os
+import uuid
 import numpy as np
 from collections import deque
 from dotenv import load_dotenv
@@ -22,6 +23,9 @@ if not api_key:
 class NodoEdge:
     def __init__(self, maquina_id):
         self.maquina_id = maquina_id
+        self.headers = {"Authorization": "Bearer " + os.environ["DEVICE_API_KEY"]}
+        self.boot_id = uuid.uuid4().hex
+        self.sequence = 0
         api_base = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
         api_base_str = str(api_base)
         api_base_clean = api_base_str.rstrip("/")
@@ -58,7 +62,8 @@ class NodoEdge:
     def _cargar_limites_desde_api(self):
         try:
             url = f"{self.api_base}/api/maquinas/{self.maquina_id}/config"
-            resp = requests.get(url, timeout=4)
+            resp = requests.get(url, headers=self.headers, timeout=4)
+            resp.raise_for_status()
             if resp.status_code == 200:
                 cfg = resp.json()
                 self.temp_alerta = float(cfg["temp_alerta"])
@@ -303,7 +308,9 @@ class NodoEdge:
         if "temp_ambiente" in datos:
             t_amb = datos["temp_ambiente"]
 
+        self.sequence += 1
         payload_telemetria = {
+            "sequence": self.sequence, "boot_id": self.boot_id, "firmware_version": "simulator-3",
             "maquina_id": self.maquina_id,
             "voltaje":     datos["voltaje"],
             "temperatura": datos["temperatura"],
@@ -320,7 +327,7 @@ class NodoEdge:
         }
 
         try:
-            requests.post(self.url_sensores, json=payload_telemetria, timeout=10).raise_for_status()
+            requests.post(self.url_sensores, headers=self.headers, json=payload_telemetria, timeout=10).raise_for_status()
         except requests.exceptions.RequestException as e:
             print(f"[Edge] Error enviando telemetría: {e}")
 
@@ -439,7 +446,7 @@ class NodoEdge:
         }
 
         try:
-            requests.post(self.url_alertas, json=payload_alerta, timeout=5)
+            requests.post(self.url_alertas, headers=self.headers, json=payload_alerta, timeout=5).raise_for_status()
         except requests.exceptions.RequestException as e:
             print(f"[Edge] Error enviando alerta: {e}")
 

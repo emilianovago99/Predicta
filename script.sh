@@ -3,7 +3,10 @@ import time
 import requests
 import google.generativeai as genai
 
-genai.configure(api_key="AIzaSyDc8qgOJIAHGTtKUtpIdqv9xKg1Fv_kye4")
+import os
+from dotenv import load_dotenv
+load_dotenv()
+genai.configure(api_key=os.environ['GEMINI_API_KEY'])
 modelo_gemini = genai.GenerativeModel('gemini-2.5-flash')
 
 class MotorEdgeAI:
@@ -50,13 +53,13 @@ class MotorEdgeAI:
         diagnostico = respuesta.text
 
         payload = {
-            "id_maquina": 1,
+            "maquina_id": os.getenv("MACHINE_ID", "M-01"),
             "riesgo": 85.0,
             "diagnostico": diagnostico
         }
         
         try:
-            requests.post("http://localhost:8000/api/alertas", json=payload)
+            requests.post(os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/") + "/api/alertas", json=payload, headers={"Authorization": "Bearer " + os.environ["DEVICE_API_KEY"]}, timeout=10).raise_for_status()
             print("Alerta verificada y subida al servidor con éxito.")
         except Exception as e:
             print("Error de conexión con el servidor principal.")

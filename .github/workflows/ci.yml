@@ -1,0 +1,70 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to the configured Ubuntu VM after all checks pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt ruff
+      - run: ruff check --select E9,F63,F7,F82 main.py settings.py database.py security.py migrate.py admin.py tests
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - run: bash -n scripts/backup_db.sh scripts/restore_db.sh
+      - name: Validate production exposure and configuration
+        run: |
+          export DB_PASSWORD=$(openssl rand -hex 32)
+          export DB_ROOT_PASSWORD=$(openssl rand -hex 32)
+          export JWT_SECRET=$(openssl rand -hex 32)
+          export DOMAIN=example.com ACME_EMAIL=ci@example.com
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.prod.yml config --quiet
+          docker compose -f docker-compose.prod.yml config --format json > /tmp/compose.json
+          python - <<'PY'
+          import json
+          services = json.load(open('/tmp/compose.json'))['services']
+          assert 'simulator' not in services
+          assert all(not cfg.get('ports') for name, cfg in services.items() if name != 'caddy')
+          assert {p['target'] for p in services['caddy']['ports']} == {80, 443}
+          PY
+          docker run --rm -e DOMAIN -e ACME_EMAIL -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+  flutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mantenimiento_predictivo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.3'
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build web --release --no-web-resources-cdn
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tests/run_stack.py
+  deploy:
+    needs: [backend, flutter, integration]
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit

@@ -102,7 +102,7 @@ class _WorkspaceState extends State<Workspace> {
       const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(widget.user['nombre'], overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
         Text(widget.user['rol'], style: const TextStyle(color: muted, fontSize: 11)),
-      ])), IconButton(tooltip: 'Cerrar sesión', icon: const Icon(Icons.logout_rounded, size: 18), onPressed: () => Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const PantallaLogin()), (_) => false)),
+      ])), IconButton(tooltip: 'Cerrar sesión', icon: const Icon(Icons.logout_rounded, size: 18), onPressed: () async { await Api.logout(); if (mounted) { sessionNavigator.currentState?.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const PantallaLogin()), (_) => false); } }),
     ]),
   ]));
 

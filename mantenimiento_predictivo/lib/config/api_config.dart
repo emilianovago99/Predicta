@@ -2,27 +2,22 @@ import 'package:flutter/foundation.dart';
 
 class ApiConfig {
   static String get baseUrl {
+    // Release web always uses the serving origin and its /api reverse proxy.
+    if (kIsWeb && kReleaseMode) return Uri.base.origin;
     const configured = String.fromEnvironment('API_BASE_URL');
-    final value = configured.trim();
-    if (value.isNotEmpty) return value.replaceFirst(RegExp(r'/+$'), '');
-    if (kIsWeb) {
-      final origin = Uri.base;
-      final port = origin.hasPort ? origin.port : (origin.scheme == 'https' ? 443 : 80);
-      // Solo el nginx de Docker (8088) y deploys en 80/443 proxyan /api.
-      // flutter run -d chrome usa un puerto aleatorio (p. ej. 57594) sin API.
-      if (port == 80 || port == 443 || port == 8088) {
-        return origin.origin.replaceFirst(RegExp(r'/+$'), '');
+    if (configured.trim().isNotEmpty) {
+      final value = configured.trim().replaceFirst(RegExp(r'/+$'), '');
+      final uri = Uri.parse(value);
+      if (!uri.hasAuthority || (kReleaseMode && uri.scheme != 'https')) {
+        throw StateError('API_BASE_URL debe ser un origen HTTPS en release');
       }
-      return 'http://127.0.0.1:8000';
+      return value;
     }
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000';
-    }
+    if (kIsWeb) return Uri.base.origin;
+    if (kReleaseMode) throw StateError('Configura --dart-define=API_BASE_URL=https://DOMAIN');
+    if (defaultTargetPlatform == TargetPlatform.android) return 'http://10.0.2.2:8000';
     return 'http://127.0.0.1:8000';
   }
 
-  static Uri uri(String path) {
-    final normalized = path.startsWith('/') ? path : '/$path';
-    return Uri.parse('$baseUrl$normalized');
-  }
+  static Uri uri(String path) => Uri.parse('$baseUrl${path.startsWith('/') ? path : '/$path'}');
 }

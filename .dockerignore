@@ -13,3 +13,16 @@ artifacts
 .vscode
 =*
 firmware_config.h
+
+secrets.h
+*.pem
+*.key
+*.p12
+*.jks
+**/key.properties
+backups/
+.env.production
+.envrc
+id_rsa
+id_ed25519
+*.sql.gz

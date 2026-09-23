@@ -1,12 +1,6 @@
-// =============================================================
-//  Mecanimales — ESP32 Unified Firmware v2.0
-//  Arquitectura: Lectura de sensores + Seguridad local + HTTP POST
-//  Tabla destino: SensorData (id_maquina, temperatura, temp_ambiente,
-//                              vibracion, voltaje, velocidad, humedad)
-// =============================================================
-
-// ── Librerías ────────────────────────────────────────────────
+// Predicta ESP32 v3: sensor safety and network transport run independently.
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -14,196 +8,151 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
+#include <time.h>
+#include <esp_system.h>
+#include "secrets.h"
 
-// ── Credenciales de Red ───────────────────────────────────────
-const char* ssid        = "S24B";
-const char* password    = "12gracias";
-const char* serverName  = "http://10.170.192.77:8000/api/sensores";
-
-// ── Identificador de Máquina ──────────────────────────────────
-const char* ID_MAQUINA  = "M-01";
-
-// ── Pines ─────────────────────────────────────────────────────
-#define PIN_TEMP_MOTOR   15   // DS18B20 — temperatura del motor
-#define PIN_RELE         18   // Relevador — paro de emergencia
-#define PIN_DHT           4   // DHT11    — temp. ambiente + humedad
-#define PIN_FLAMA_ANALOG 34   // Sensor analógico de flama
-
-// ── Tipo DHT ──────────────────────────────────────────────────
-#define DHTTYPE DHT11
-
-// ── Valores Estáticos (sin sensor físico disponible) ─────────
-//    RPM equivalente a 1 rev/s → 60 RPM
-//    Voltaje nominal de línea DC
-const float VELOCIDAD_FIJA = 60.0;   // RPM
-const float VOLTAJE_FIJO   = 12.0;   // Voltios
-
-// ── Umbrales de Seguridad Local ───────────────────────────────
-#define UMBRAL_TEMP_MOTOR    45.0   // °C — motor caliente
-#define UMBRAL_TEMP_AMBIENTE 27.0   // °C — ambiente crítico
-#define UMBRAL_VIBRACION     15.0   // m/s² — vibración alta
-#define UMBRAL_FUEGO        1200    // ADC  — valor bajo = fuego
-
-// ── Temporización ─────────────────────────────────────────────
-#define INTERVALO_HTTP_MS  2000UL   // 2 s entre transmisiones HTTP
-
-// ── Objetos de sensores ───────────────────────────────────────
-OneWire          oneWire(PIN_TEMP_MOTOR);
+#define PIN_TEMP_MOTOR 15
+#define PIN_RELE 18
+#define PIN_DHT 4
+#define PIN_FLAMA_ANALOG 34
+#define UMBRAL_TEMP_MOTOR 45.0
+#define UMBRAL_TEMP_AMBIENTE 27.0
+#define UMBRAL_VIBRACION 15.0
+#define UMBRAL_FUEGO 1200
+const float VELOCIDAD_FIJA = 60.0;
+const float VOLTAJE_FIJO = 12.0;
+const char* FIRMWARE_VERSION = "3.0.0";
+OneWire oneWire(PIN_TEMP_MOTOR);
 DallasTemperature sensorsMotor(&oneWire);
-DHT              dht(PIN_DHT, DHTTYPE);
+DHT dht(PIN_DHT, DHT11);
 Adafruit_MPU6050 mpu;
 
-// ── Variable de temporización ─────────────────────────────────
-unsigned long ultimoEnvioHTTP = 0;
+struct Measurement {
+  float motor, ambient, vibration, humidity;
+  uint32_t sequence;
+};
+QueueHandle_t pending;
+char bootId[33];
+volatile bool communicationOk = false;
+volatile uint32_t lastSuccess = 0;
+bool mpuReady = false;
 
+// Only this task owns HTTP/TLS. Blocking DNS, handshake and retries never stop loop().
+void networkTask(void*) {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  uint32_t lastReconnect = millis();
+  Measurement sample;
+  for (;;) {
+    if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000) {
+      communicationOk = false;
+      if (millis() - lastReconnect >= 10000) {
+        if (WiFi.status() != WL_CONNECTED) WiFi.reconnect();
+        else configTime(0, 0, "pool.ntp.org", "time.google.com");
+        lastReconnect = millis();
+      }
+      vTaskDelay(pdMS_TO_TICKS(250));
+      continue;
+    }
+    if (xQueueReceive(pending, &sample, pdMS_TO_TICKS(250)) != pdTRUE) continue;
+    char payload[600];
+    snprintf(payload, sizeof(payload),
+      "{\"maquina_id\":\"%s\",\"temperatura\":%.2f,\"temp_ambiente\":%.2f,"
+      "\"vibracion\":%.2f,\"voltaje\":%.2f,\"velocidad\":%d,\"humedad\":%.2f,"
+      "\"sequence\":%lu,\"boot_id\":\"%s\",\"firmware_version\":\"%s\"}",
+      MACHINE_ID, sample.motor, sample.ambient, sample.vibration, VOLTAJE_FIJO,
+      (int)VELOCIDAD_FIJA, sample.humidity, (unsigned long)sample.sequence, bootId, FIRMWARE_VERSION);
+    bool delivered = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      WiFiClientSecure tls;
+      WiFiClient plain;
+      HTTPClient http;
+      tls.setCACert(API_ROOT_CA);  // PEM root CA supplied in secrets.h. Never setInsecure().
+      tls.setHandshakeTimeout(8);
+      http.setConnectTimeout(5000);
+      http.setTimeout(5000);
+      http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+      bool started = false;
+      if (String(API_URL).startsWith("https://")) started = http.begin(tls, API_URL);
+      else if (ALLOW_LOCAL_HTTP && String(API_URL).startsWith("http://")) started = http.begin(plain, API_URL);
+      if (!started) { Serial.println("[COMUNICACION] URL/TLS sin configurar"); break; }
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("Authorization", String("Bearer ") + DEVICE_API_KEY);
+      int code = http.POST((uint8_t*)payload, strlen(payload));
+      http.end();
+      if (code >= 200 && code < 300) {
+        delivered = true;
+        lastSuccess = millis();
+        break;
+      }
+      Serial.printf("[COMUNICACION] HTTP %d, intento %d/3\n", code, attempt + 1);
+      if (code >= 400 && code < 500 && code != 408 && code != 429) break;
+      if (attempt < 2) vTaskDelay(pdMS_TO_TICKS((1000UL << attempt) + (esp_random() % 250)));
+    }
+    communicationOk = delivered;
+    if (!delivered) Serial.println("[COMUNICACION] Medicion descartada tras reintentos limitados");
+  }
+}
 
-// =============================================================
-//  SETUP
-// =============================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
-
-  // ── Relevador apagado al inicio (estado seguro) ───────────
   pinMode(PIN_RELE, OUTPUT);
-  digitalWrite(PIN_RELE, LOW);
-
-  // ── Inicialización de sensores ────────────────────────────
+  digitalWrite(PIN_RELE, LOW);  // Existing relay polarity retained.
   sensorsMotor.begin();
-  dht.begin();
-
-  if (!mpu.begin()) {
-    Serial.println("[WARN] MPU6050 no detectado. Vibracion reportara 0.");
-  } else {
-    Serial.println("[OK] MPU6050 inicializado.");
-  }
-
-  // ── Conexión WiFi ─────────────────────────────────────────
-  Serial.print("[WiFi] Conectando a: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("[WiFi] Conexion establecida.");
-  Serial.print("[WiFi] IP del ESP32: ");
-  Serial.println(WiFi.localIP());
-  Serial.println("[INFO] Firmware Mecanimales v2.0 listo.\n");
-}
-
-
-// =============================================================
-//  LOOP
-// =============================================================
-void loop() {
-
-  // ── 1. LECTURA DE SENSORES ──────────────────────────────────
-
-  // DS18B20: temperatura del motor (°C)
+  sensorsMotor.setWaitForConversion(false);
   sensorsMotor.requestTemperatures();
-  float tempMotor = sensorsMotor.getTempCByIndex(0);
-
-  // DHT11: temperatura ambiente (°C) y humedad relativa (%)
-  float tempAmbiente = dht.readTemperature();
-  float humedad      = dht.readHumidity();
-
-  // Valores NaN → 0.0 para evitar JSON inválido
-  if (isnan(tempAmbiente)) tempAmbiente = 0.0;
-  if (isnan(humedad))      humedad      = 0.0;
-
-  // MPU6050: magnitud del vector de aceleración (m/s²)
-  float vibracion = 0.0;
-  sensors_event_t a, g, temp_mpu;
-  mpu.getEvent(&a, &g, &temp_mpu);
-  vibracion = sqrt(
-    pow(a.acceleration.x, 2) +
-    pow(a.acceleration.y, 2) +
-    pow(a.acceleration.z, 2)
-  );
-
-  // Sensor analógico de flama (valor ADC)
-  int valorFuego = analogRead(PIN_FLAMA_ANALOG);
-
-  // ── 2. MATRIZ DE SEGURIDAD LOCAL (se evalúa SIEMPRE) ────────
-  bool   emergencia = false;
-  String motivo     = "";
-
-  if (tempMotor    > UMBRAL_TEMP_MOTOR)    { emergencia = true; motivo += "[MOTOR CALIENTE] ";    }
-  if (tempAmbiente > UMBRAL_TEMP_AMBIENTE) { emergencia = true; motivo += "[AMBIENTE CRITICO] ";  }
-  if (vibracion    > UMBRAL_VIBRACION)     { emergencia = true; motivo += "[VIBRACION ALTA] ";    }
-  if (valorFuego   < UMBRAL_FUEGO)         { emergencia = true; motivo += "[FUEGO DETECTADO] ";   }
-
-  if (emergencia) {
-    digitalWrite(PIN_RELE, HIGH);   // Activa el paro de emergencia
-    Serial.print("[EMERGENCIA] PARO ACTIVO — ");
-    Serial.println(motivo);
-  } else {
-    digitalWrite(PIN_RELE, LOW);    // Sistema en condiciones normales
+  dht.begin();
+  mpuReady = mpu.begin();
+  snprintf(bootId, sizeof(bootId), "%08lx%08lx%08lx%08lx",
+    (unsigned long)esp_random(), (unsigned long)esp_random(),
+    (unsigned long)esp_random(), (unsigned long)esp_random());
+  pending = xQueueCreate(16, sizeof(Measurement));
+  if (!pending || xTaskCreate(networkTask, "predicta-network", 12288, nullptr, 1, nullptr) != pdPASS) {
+    Serial.println("[COMUNICACION] No se pudo iniciar transporte; seguridad local activa");
   }
-
-  // ── 3. TRANSMISIÓN HTTP (no bloqueante, cada 2 s) ───────────
-  unsigned long ahora = millis();
-  if (ahora - ultimoEnvioHTTP >= INTERVALO_HTTP_MS) {
-    ultimoEnvioHTTP = ahora;
-
-    if (WiFi.status() == WL_CONNECTED) {
-      enviarDatos(tempMotor, tempAmbiente, vibracion, humedad);
-    } else {
-      Serial.println("[WiFi] Desconectado. Reintentando reconexion...");
-      WiFi.reconnect();
-    }
-  }
-
-  // Sin delay bloqueante — el loop() vuelve inmediatamente
-  // para que la seguridad local se reevalúe sin demoras.
 }
 
-
-// =============================================================
-//  FUNCIÓN: Construir JSON y ejecutar HTTP POST
-//  Mapeo directo a columnas de SensorData:
-//    id_maquina   → ID_MAQUINA  (constante)
-//    temperatura  → tempMotor   (DS18B20)
-//    temp_ambiente→ tempAmbiente(DHT11)
-//    vibracion    → vibracion   (MPU6050)
-//    voltaje      → VOLTAJE_FIJO(estático 12.0 V)
-//    velocidad    → VELOCIDAD_FIJA (estático 60.0 RPM)
-//    humedad      → humedad     (DHT11)
-// =============================================================
-void enviarDatos(float temperatura, float temp_ambiente,
-                 float vibracion,   float humedad) {
-
-  HTTPClient http;
-  http.begin(serverName);
-  http.addHeader("Content-Type", "application/json");
-
-  // Construcción del payload — valores con 2 decimales
-  String jsonPayload = "{";
-  jsonPayload += "\"maquina_id\":"    + String("\"") + ID_MAQUINA + "\",";
-  jsonPayload += "\"temperatura\":"   + String(temperatura,    2) + ",";
-  jsonPayload += "\"temp_ambiente\":" + String(temp_ambiente,  2) + ",";
-  jsonPayload += "\"vibracion\":"     + String(vibracion,      2) + ",";
-  jsonPayload += "\"voltaje\":"       + String(VOLTAJE_FIJO,   2) + ",";
-  jsonPayload += "\"velocidad\":"     + String((int)VELOCIDAD_FIJA) + ",";
-  jsonPayload += "\"humedad\":"       + String(humedad,        2);
-  jsonPayload += "}";
-
-  Serial.println("[HTTP] Enviando POST...");
-  Serial.println("[HTTP] Payload: " + jsonPayload);
-
-  int httpResponseCode = http.POST(jsonPayload);
-
-  if (httpResponseCode > 0) {
-    Serial.print("[HTTP] Respuesta del servidor — Codigo: ");
-    Serial.println(httpResponseCode);
-  } else {
-    Serial.print("[HTTP] Error en el envio — Codigo interno: ");
-    Serial.println(httpResponseCode);
+void loop() {
+  static uint32_t lastMotor = millis(), lastDht = 0, lastMpu = 0, lastSend = 0, lastStatus = 0;
+  static uint32_t sequence = 0;
+  static float motor = 0, ambient = 0, humidity = 0, vibration = 0;
+  const uint32_t now = millis();
+  if (now - lastMotor >= 800) {
+    motor = sensorsMotor.getTempCByIndex(0);
+    sensorsMotor.requestTemperatures();
+    lastMotor = now;
   }
-
-  http.end();
+  if (now - lastDht >= 2000) {
+    ambient = dht.readTemperature(); humidity = dht.readHumidity();
+    // Retain legacy DHT fallback; report invalid sensors independently below.
+    if (isnan(ambient)) ambient = 0;
+    if (isnan(humidity)) humidity = 0;
+    lastDht = now;
+  }
+  if (mpuReady && now - lastMpu >= 100) {
+    sensors_event_t a, g, t;
+    mpu.getEvent(&a, &g, &t);
+    vibration = sqrt(a.acceleration.x*a.acceleration.x + a.acceleration.y*a.acceleration.y + a.acceleration.z*a.acceleration.z);
+    lastMpu = now;
+  }
+  const bool machineRisk = motor > UMBRAL_TEMP_MOTOR || ambient > UMBRAL_TEMP_AMBIENTE ||
+    vibration > UMBRAL_VIBRACION || analogRead(PIN_FLAMA_ANALOG) < UMBRAL_FUEGO;
+  digitalWrite(PIN_RELE, machineRisk ? HIGH : LOW);
+  if (now - lastSend >= 2000) {
+    lastSend = now;
+    Measurement sample{motor, ambient, vibration, humidity, sequence++};
+    // Bounded memory: keep pending order and drop new samples when full.
+    if (pending && xQueueSend(pending, &sample, 0) != pdTRUE)
+      Serial.println("[COMUNICACION] Buffer lleno; nueva medicion descartada");
+  }
+  if (now - lastStatus >= 2000) {
+    Serial.printf("[MAQUINA] %s | [COMUNICACION] %s\n", machineRisk ? "RIESGO" : "NORMAL",
+      communicationOk && now-lastSuccess < 30000 ? "OK" : "SIN COMUNICACION");
+    if (!mpuReady || motor == DEVICE_DISCONNECTED_C) Serial.println("[SENSOR] Revisar MPU6050/DS18B20");
+    lastStatus = now;
+  }
+  delay(1); // Yield to FreeRTOS, no network waits in this loop.
 }

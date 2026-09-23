@@ -1,6 +1,14 @@
 from contextlib import asynccontextmanager
 from typing import Optional, Literal
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Response
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from database import conectar_db
+from migrate import migrate as migrar_esquema
+from settings import validate_settings, cors_origins
+from security import (hash_password, verify_password, issue_token, get_current_user,
+    require_editor, require_installer, check_company, check_area, check_machine,
+    get_device, check_device, machine_reader, rotate_device_key)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 import mysql.connector
@@ -20,8 +28,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import time
 import hashlib
-import hmac
-import secrets
 
 load_dotenv()
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -82,16 +88,18 @@ model_store = ModelStore()
 # ─────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_settings()
     migrar_esquema()
     print("=== Predicta API iniciada ===")
     yield
     print("=== Predicta API detenida ===")
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, docs_url='/docs' if os.getenv('APP_ENV') != 'production' else None,
+              redoc_url=None, openapi_url='/openapi.json' if os.getenv('APP_ENV') != 'production' else None)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -99,53 +107,6 @@ app.add_middleware(
 
 # ─────────────────────────────────────────────────────────────────────────
 # BASE DE DATOS
-# ─────────────────────────────────────────────────────────────────────────
-def conectar_db():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST", "127.0.0.1"),
-        port=int(os.getenv("DB_PORT", "3307")),
-        user=os.getenv("DB_USER", "api_user"),
-        password=os.getenv("DB_PASSWORD", "api_password_seguro"),
-        database=os.getenv("DB_NAME", "mecanimales_db"),
-        connection_timeout=5,
-        autocommit=False,
-    )
-
-
-def migrar_esquema():
-    """Actualización aditiva para volúmenes anteriores; nunca elimina datos."""
-    conexion = conectar_db()
-    cursor = conexion.cursor()
-    try:
-        columns = {
-            'Maquina': {
-                'temp_amb_alerta': 'FLOAT DEFAULT 30',
-                'temp_amb_peligro': 'FLOAT DEFAULT 38',
-                'medir_temp_amb': 'BOOLEAN DEFAULT TRUE',
-            },
-            'SensorData': {
-                'temp_ambiente': 'FLOAT NOT NULL DEFAULT 25',
-                **{key: 'FLOAT DEFAULT NULL' for key in
-                   ('temp_media', 'temp_std', 'temp_delta', 'vib_media', 'vib_delta', 'score_riesgo_edge')},
-            },
-            'Alertas': {'tipo': "ENUM('critico', 'predictivo', 'evento') DEFAULT 'critico'"},
-        }
-        for table, additions in columns.items():
-            cursor.execute(f'SHOW COLUMNS FROM {table}')
-            existing = {row[0]: row[1] for row in cursor.fetchall()}
-            for column, definition in additions.items():
-                if column not in existing:
-                    cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
-            if table == 'Alertas' and 'tipo' in existing and 'evento' not in existing['tipo']:
-                cursor.execute("ALTER TABLE Alertas MODIFY tipo ENUM('critico','predictivo','evento') DEFAULT 'critico'")
-        conexion.commit()
-    finally:
-        cursor.close()
-        conexion.close()
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# TELEGRAM
 # ─────────────────────────────────────────────────────────────────────────
 def notificar_telegram(maquina_id: str, riesgo: float, diagnostico: str):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -174,29 +135,9 @@ class Entrada(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, allow_inf_nan=False)
 
 
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600000).hex()
-    return f"pbkdf2_sha256$600000${salt}${digest}"
-
-
-def verify_password(password: str, stored: str) -> bool:
-    if not stored.startswith("pbkdf2_sha256$"):
-        given, expected = password.encode(), stored.encode()
-        if len(given) != len(expected):
-            return False
-        return hmac.compare_digest(given, expected)
-    try:
-        _, rounds, salt, digest = stored.split("$")
-        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(rounds)).hex()
-        return hmac.compare_digest(actual, digest)
-    except (ValueError, TypeError):
-        return False
-
-
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=100)
+    password: str = Field(max_length=128)
 
 class Telemetria(Entrada):
     model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
@@ -205,6 +146,16 @@ class Telemetria(Entrada):
         ...,
         validation_alias=AliasChoices("maquina_id", "id_maquina"),
     )
+    sequence: Optional[int] = Field(default=None, ge=0, le=9223372036854775807)
+    boot_id: Optional[str] = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,64}$')
+    firmware_version: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode='after')
+    def identity(self):
+        if self.sequence is not None and self.boot_id is None:
+            self.boot_id = 'legacy'
+        return self
+
     voltaje:    float
     temperatura: float  # temperatura del motor
     temp_ambiente: float = 25.0
@@ -300,7 +251,7 @@ def health():
 
 
 @app.post('/api/empresas', status_code=201)
-def registrar_empresa(datos: EmpresaRegistro):
+def registrar_empresa(datos: EmpresaRegistro, user=Depends(require_installer)):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
@@ -749,23 +700,22 @@ def iniciar_sesion(credenciales: LoginRequest):
         usuario = cursor.fetchone()
         if not usuario or not verify_password(credenciales.password, usuario['password_hash']):
             raise HTTPException(status_code=401, detail="Credenciales incorrectas")
-        stored = usuario.pop('password_hash')
-        if not stored.startswith('pbkdf2_sha256$'):
-            cursor.execute('UPDATE Usuario SET password_hash=%s WHERE id_usuario=%s',
-                           (hash_password(credenciales.password), usuario['id_usuario']))
-            conexion.commit()
-        return usuario
+        usuario.pop('password_hash')
+        return issue_token(usuario)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/usuarios")
-def registrar_usuario(datos: UsuarioRegistro):
+def registrar_usuario(datos: UsuarioRegistro, user=Depends(require_editor)):
+    check_company(user, datos.id_empresa)
+    if user['rol'] == 'jefe' and datos.rol != 'participante':
+        raise HTTPException(403, 'Un jefe solo puede crear participantes')
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -780,14 +730,15 @@ def registrar_usuario(datos: UsuarioRegistro):
         raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/sensores")
-def registrar_telemetria(datos: Telemetria):
+def registrar_telemetria(datos: Telemetria, device=Depends(get_device)):
+    check_device(device, datos.maquina_id)
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -798,12 +749,19 @@ def registrar_telemetria(datos: Telemetria):
                       hum_alerta, hum_peligro,
                       temp_amb_alerta, temp_amb_peligro,
                       medir_temp, medir_temp_amb, medir_vib, medir_volt, medir_vel, medir_hum
-               FROM Maquina WHERE id_maquina = %s""",
+               FROM Maquina WHERE id_maquina = %s FOR UPDATE""",
             (datos.maquina_id,),
         )
         limites = cursor.fetchone()
         if not limites:
             raise HTTPException(404, 'Máquina no registrada')
+        # Serialize each machine before deduplication and alert side effects.
+        if datos.sequence is not None:
+            cursor.execute('SELECT id_data FROM SensorData WHERE id_maquina=%s AND boot_id=%s AND `sequence`=%s',
+                           (datos.maquina_id, datos.boot_id, datos.sequence))
+            if cursor.fetchone():
+                conexion.rollback()
+                return {'status': 'Medición ya recibida', 'duplicate': True}
         evento = None
 
         cursor.execute(
@@ -839,12 +797,12 @@ def registrar_telemetria(datos: Telemetria):
         cursor.execute(
             """INSERT INTO SensorData
                (id_maquina, temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad,
-                temp_media, temp_std, temp_delta, vib_media, vib_delta, score_riesgo_edge)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                temp_media, temp_std, temp_delta, vib_media, vib_delta, score_riesgo_edge, `sequence`, boot_id, firmware_version)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (datos.maquina_id, datos.temperatura, datos.temp_ambiente,
              datos.vibracion, datos.voltaje, datos.velocidad, datos.humedad,
              datos.temp_media, datos.temp_std, datos.temp_delta,
-             datos.vib_media, datos.vib_delta, datos.score_riesgo_edge),
+             datos.vib_media, datos.vib_delta, datos.score_riesgo_edge, datos.sequence, datos.boot_id, datos.firmware_version),
         )
 
         # Los umbrales activos son la fuente de verdad; ML no puede ocultar peligro.
@@ -919,14 +877,15 @@ def registrar_telemetria(datos: Telemetria):
         raise
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/alertas")
-def registrar_alerta(alerta: Alerta):
+def registrar_alerta(alerta: Alerta, device=Depends(get_device)):
+    check_device(device, alerta.maquina_id)
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -956,14 +915,15 @@ def registrar_alerta(alerta: Alerta):
         raise
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/maquinas/{id_maquina}/datos")
-def obtener_datos_maquina(id_maquina: str):
+def obtener_datos_maquina(id_maquina: str, user=Depends(get_current_user)):
+    check_machine(user, id_maquina)
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -982,8 +942,8 @@ def obtener_datos_maquina(id_maquina: str):
             raise HTTPException(status_code=404, detail="Maquina no encontrada")
 
         cursor.execute(
-            """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad, fecha,
-                      TIMESTAMPDIFF(SECOND, fecha, CURRENT_TIMESTAMP) AS edad_segundos
+            """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad, fecha, received_at, `sequence`, boot_id, firmware_version,
+                      TIMESTAMPDIFF(SECOND, received_at, CURRENT_TIMESTAMP) AS edad_segundos
                FROM SensorData WHERE id_maquina = %s
                ORDER BY id_data DESC LIMIT 50""",
             (id_maquina,),
@@ -1019,14 +979,15 @@ def obtener_datos_maquina(id_maquina: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/maquinas/{id_maquina}/prediccion")
-def obtener_prediccion(id_maquina: str):
+def obtener_prediccion(id_maquina: str, user=Depends(get_current_user)):
+    check_machine(user, id_maquina)
     """
     RUL preventivo: ciclos estimados hasta umbral de alerta (amarillo)
     y hasta umbral de peligro (rojo), con intervalo de confianza.
@@ -1059,14 +1020,14 @@ def obtener_prediccion(id_maquina: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/maquinas/{id_maquina}/config")
-def obtener_configuracion_maquina(id_maquina: str):
+def obtener_configuracion_maquina(id_maquina: str, access=Depends(machine_reader)):
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -1087,14 +1048,16 @@ def obtener_configuracion_maquina(id_maquina: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.put("/api/maquinas/{id_maquina}/config")
-def actualizar_configuracion_maquina(id_maquina: str, config: ConfiguracionMaquina):
+def actualizar_configuracion_maquina(id_maquina: str, config: ConfiguracionMaquina, user=Depends(require_editor)):
+    check_machine(user, id_maquina)
+    check_area(user, config.id_area)
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -1130,14 +1093,14 @@ def actualizar_configuracion_maquina(id_maquina: str, config: ConfiguracionMaqui
         return {"status": "Configuracion actualizada exitosamente"}
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/empresas")
-def obtener_empresas():
+def obtener_empresas(user=Depends(get_current_user)):
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -1145,17 +1108,19 @@ def obtener_empresas():
         (SELECT COUNT(*) FROM Area a WHERE a.id_empresa=e.id_empresa) AS total_areas,
         (SELECT COUNT(*) FROM Maquina m JOIN Area a ON a.id_area=m.id_area
          WHERE a.id_empresa=e.id_empresa) AS total_maquinas
-        FROM Empresa e ORDER BY e.nombre""")
+        FROM Empresa e WHERE (%s = 'instalador' OR e.id_empresa = %s) ORDER BY e.nombre""",
+                       (user['rol'], user['id_empresa']))
         return cursor.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/empresas/{id_empresa}/areas")
-def obtener_areas(id_empresa: int):
+def obtener_areas(id_empresa: int, user=Depends(get_current_user)):
+    check_company(user, id_empresa)
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -1167,35 +1132,36 @@ def obtener_areas(id_empresa: int):
         )
         return cursor.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.get("/api/areas/{id_area}/maquinas")
-def obtener_maquinas_area(id_area: int):
+def obtener_maquinas_area(id_area: int, user=Depends(get_current_user)):
+    check_area(user, id_area)
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
         cursor.execute(
             """SELECT m.*,
-        (SELECT MAX(fecha) FROM SensorData s WHERE s.id_maquina=m.id_maquina) AS ultima_lectura,
-        (SELECT TIMESTAMPDIFF(SECOND, MAX(fecha), CURRENT_TIMESTAMP)
+        (SELECT MAX(received_at) FROM SensorData s WHERE s.id_maquina=m.id_maquina) AS ultima_lectura,
+        (SELECT TIMESTAMPDIFF(SECOND, MAX(received_at), CURRENT_TIMESTAMP)
          FROM SensorData s WHERE s.id_maquina=m.id_maquina) AS edad_segundos
         FROM Maquina m WHERE id_area = %s ORDER BY nombre""",
             (id_area,),
         )
         return cursor.fetchall()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/empresas_rapido")
-def crear_empresa(nombre: str):
+def crear_empresa(nombre: str, user=Depends(require_installer)):
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -1205,14 +1171,15 @@ def crear_empresa(nombre: str):
         return {"id_empresa": id_empresa, "status": "Empresa creada exitosamente"}
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/areas")
-def crear_area(datos: AreaRegistro):
+def crear_area(datos: AreaRegistro, user=Depends(require_editor)):
+    check_company(user, datos.id_empresa)
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -1228,14 +1195,15 @@ def crear_area(datos: AreaRegistro):
         raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/maquinas")
-def registrar_maquina(datos: MaquinaRegistro):
+def registrar_maquina(datos: MaquinaRegistro, user=Depends(require_editor)):
+    check_area(user, datos.id_area)
     conexion = conectar_db()
     cursor   = conexion.cursor()
     try:
@@ -1255,14 +1223,15 @@ def registrar_maquina(datos: MaquinaRegistro):
         raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
 
 
 @app.post("/api/chat")
-def asistente_mecanimal(request: ChatRequest):
+def asistente_mecanimal(request: ChatRequest, user=Depends(get_current_user)):
+    check_machine(user, request.id_maquina)
     """
     Chatbot Mecanimal con contexto enriquecido: incluye historial reciente,
     tendencias, predicción RUL y alertas en el prompt de Gemini.
@@ -1436,7 +1405,7 @@ def asistente_mecanimal(request: ChatRequest):
         raise
     except Exception as e:
         print(f"[Chat] Error general: {e}")
-        raise HTTPException(status_code=500, detail=f"Error en chatbot: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()
@@ -1446,10 +1415,53 @@ def asistente_mecanimal(request: ChatRequest):
 # ENDPOINT EXTRA: estado de modelos en memoria (útil para debug)
 # ─────────────────────────────────────────────────────────────────────────
 @app.get("/api/ml/estado")
-def estado_modelos():
+def estado_modelos(user=Depends(require_installer)):
     return {
         "rul_models":  list(model_store.rul_models.keys()),
         "clf_models":  list(model_store.clf_models.keys()),
         "if_models":   list(model_store.if_models.keys()),
         "retrain_interval": model_store.RETRAIN_INTERVAL,
     }
+
+
+@app.exception_handler(Exception)
+async def internal_error(request, exc):
+    return JSONResponse(status_code=500, content={'detail': 'Error interno del servidor'})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    return JSONResponse(status_code=422, content={'detail': 'Datos de entrada inválidos'})
+
+
+@app.middleware('http')
+async def private_response_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.post('/api/maquinas/{id_maquina}/device-key')
+def rotate_key(id_maquina: str, response: Response, user=Depends(require_editor)):
+    check_machine(user, id_maquina)
+    response.headers['Cache-Control'] = 'no-store'
+    return {'device_api_key': rotate_device_key(id_maquina), 'maquina_id': id_maquina}
+
+
+@app.get('/api/ready')
+def ready():
+    # Models train lazily; threshold monitoring needs no trained model.
+    return health()
+
+
+@app.get('/api/me')
+def current_profile(user=Depends(get_current_user)):
+    conexion = conectar_db()
+    cursor = conexion.cursor(dictionary=True)
+    try:
+        cursor.execute('SELECT nombre AS empresa_nombre FROM Empresa WHERE id_empresa=%s', (user['id_empresa'],))
+        return {**user, **cursor.fetchone()}
+    finally:
+        cursor.close()
+        conexion.close()

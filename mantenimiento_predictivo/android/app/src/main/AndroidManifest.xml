@@ -4,7 +4,8 @@
     android:label="Predicta"
     android:name="${applicationName}"
     android:icon="@mipmap/ic_launcher"
-    android:usesCleartextTraffic="true">
+    android:usesCleartextTraffic="false"
+    android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

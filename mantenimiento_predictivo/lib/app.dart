@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
-import 'config/api_config.dart';
 import 'services/api.dart';
 import 'ui/design.dart';
 import 'workspace.dart';
+
+final sessionNavigator = GlobalKey<NavigatorState>();
 
 class AppMantenimiento extends StatelessWidget {
   const AppMantenimiento({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Predicta · Inteligencia industrial', debugShowCheckedModeBanner: false,
-    theme: predictaTheme(), home: const PantallaLogin(),
+    navigatorKey: sessionNavigator, theme: predictaTheme(), home: const PantallaLogin(),
   );
 }
 
@@ -24,6 +25,30 @@ class _PantallaLoginState extends State<PantallaLogin> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false, _hide = true;
+  @override
+  void initState() {
+    super.initState();
+    _busy = true;
+    Api.client.onUnauthorized = () {
+      sessionNavigator.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const PantallaLogin()), (_) => false);
+    };
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    try {
+      await Api.initialize();
+      if (Api.client.token == null) return;
+      final user = await Api.request('/api/me');
+      if (mounted) {
+        Navigator.of(context).pushReplacement(MaterialPageRoute(
+          builder: (_) => Workspace(user: Map<String, dynamic>.from(user))));
+      }
+    } catch (_) { await Api.logout(); }
+    finally { if (mounted) setState(() => _busy = false); }
+  }
+
   String? _error;
   @override
   void dispose() { _email.dispose(); _password.dispose(); super.dispose(); }
@@ -33,6 +58,8 @@ class _PantallaLoginState extends State<PantallaLogin> {
     setState(() { _busy = true; _error = null; });
     try {
       final user = await Api.request('/api/login', body: {'email': _email.text.trim(), 'password': _password.text});
+      await Api.saveToken(user['access_token'] as String);
+      _password.clear();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => Workspace(user: Map<String, dynamic>.from(user))));
     } catch (e) {
@@ -87,11 +114,6 @@ class _PantallaLoginState extends State<PantallaLogin> {
       FilledButton(onPressed: _busy ? null : _login, child: _busy
         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
         : const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Text('Entrar al espacio'), SizedBox(width: 12), Icon(Icons.arrow_forward_rounded, size: 18)])),
-      const SizedBox(height: 28),
-      Text('Servidor: ${ApiConfig.baseUrl}', textAlign: TextAlign.center, style: const TextStyle(color: muted, fontSize: 11)),
-      const SizedBox(height: 10),
-      const Text('Cuentas de prueba\nadmin@predicta.com / root\njefe@predicta.com / hackatec2026\ntecnico@predicta.com / 1234',
-        textAlign: TextAlign.center, style: TextStyle(color: muted, fontSize: 12, height: 1.45)),
 
     ]))),
   )));

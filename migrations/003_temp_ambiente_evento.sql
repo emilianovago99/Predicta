@@ -1,18 +1,24 @@
--- Migración: temperatura ambiente + alertas por evento (cambio brusco)
--- Ejecutar si ya tienes la BD creada (sin borrar volúmenes):
---   Get-Content migrations/003_temp_ambiente_evento.sql | docker exec -i hack-db-1 mysql -u api_user -papi_password_seguro mecanimales_db
+ALTER TABLE Maquina
+    ADD COLUMN IF NOT EXISTS temp_amb_alerta FLOAT DEFAULT 30.0 AFTER hum_peligro;
 
 ALTER TABLE Maquina
-    ADD COLUMN temp_amb_alerta FLOAT DEFAULT 30.0 AFTER hum_peligro;
+    ADD COLUMN IF NOT EXISTS temp_amb_peligro FLOAT DEFAULT 38.0 AFTER temp_amb_alerta;
 
 ALTER TABLE Maquina
-    ADD COLUMN temp_amb_peligro FLOAT DEFAULT 38.0 AFTER temp_amb_alerta;
-
-ALTER TABLE Maquina
-    ADD COLUMN medir_temp_amb BOOLEAN DEFAULT TRUE AFTER medir_hum;
+    ADD COLUMN IF NOT EXISTS medir_temp_amb BOOLEAN DEFAULT TRUE AFTER medir_hum;
 
 ALTER TABLE SensorData
-    ADD COLUMN temp_ambiente FLOAT NOT NULL DEFAULT 25.0 AFTER temperatura;
+    ADD COLUMN IF NOT EXISTS temp_ambiente FLOAT NOT NULL DEFAULT 25.0 AFTER temperatura;
+
+ALTER TABLE Alertas
+    ADD COLUMN IF NOT EXISTS tipo ENUM('critico', 'predictivo', 'evento') DEFAULT 'critico';
 
 ALTER TABLE Alertas
     MODIFY COLUMN tipo ENUM('critico', 'predictivo', 'evento') DEFAULT 'critico';
+
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS temp_media FLOAT DEFAULT NULL;
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS temp_std FLOAT DEFAULT NULL;
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS temp_delta FLOAT DEFAULT NULL;
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS vib_media FLOAT DEFAULT NULL;
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS vib_delta FLOAT DEFAULT NULL;
+ALTER TABLE SensorData ADD COLUMN IF NOT EXISTS score_riesgo_edge FLOAT DEFAULT NULL;

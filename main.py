@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 import mysql.connector
 import requests
 import os
@@ -10,13 +10,18 @@ import joblib
 import numpy as np
 from io import BytesIO
 from dotenv import load_dotenv
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.ensemble import GradientBoostingRegressor, IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import time
 import hashlib
+import hmac
+import secrets
 
 load_dotenv()
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -24,9 +29,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
 
 modelo_gemini = None
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    modelo_gemini = genai.GenerativeModel("gemini-2.5-flash")
+if GEMINI_API_KEY and genai is not None:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        modelo_gemini = genai.GenerativeModel("gemini-2.5-flash")
+    except Exception:
+        modelo_gemini = None
 
 # Ventana de proyeccion y alerta preventiva (antes de llegar al amarillo)
 CICLOS_HORIZONTE_ML = 60
@@ -74,6 +82,7 @@ model_store = ModelStore()
 # ─────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    migrar_esquema()
     print("=== Predicta API iniciada ===")
     yield
     print("=== Predicta API detenida ===")
@@ -93,13 +102,46 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────────────
 def conectar_db():
     return mysql.connector.connect(
-        host="127.0.0.1",
-        port=3307,
-        user="api_user",
-        password="api_password_seguro",
-        database="mecanimales_db",
+        host=os.getenv("DB_HOST", "127.0.0.1"),
+        port=int(os.getenv("DB_PORT", "3307")),
+        user=os.getenv("DB_USER", "api_user"),
+        password=os.getenv("DB_PASSWORD", "api_password_seguro"),
+        database=os.getenv("DB_NAME", "mecanimales_db"),
+        connection_timeout=5,
         autocommit=False,
     )
+
+
+def migrar_esquema():
+    """Actualización aditiva para volúmenes anteriores; nunca elimina datos."""
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        columns = {
+            'Maquina': {
+                'temp_amb_alerta': 'FLOAT DEFAULT 30',
+                'temp_amb_peligro': 'FLOAT DEFAULT 38',
+                'medir_temp_amb': 'BOOLEAN DEFAULT TRUE',
+            },
+            'SensorData': {
+                'temp_ambiente': 'FLOAT NOT NULL DEFAULT 25',
+                **{key: 'FLOAT DEFAULT NULL' for key in
+                   ('temp_media', 'temp_std', 'temp_delta', 'vib_media', 'vib_delta', 'score_riesgo_edge')},
+            },
+            'Alertas': {'tipo': "ENUM('critico', 'predictivo', 'evento') DEFAULT 'critico'"},
+        }
+        for table, additions in columns.items():
+            cursor.execute(f'SHOW COLUMNS FROM {table}')
+            existing = {row[0]: row[1] for row in cursor.fetchall()}
+            for column, definition in additions.items():
+                if column not in existing:
+                    cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+            if table == 'Alertas' and 'tipo' in existing and 'evento' not in existing['tipo']:
+                cursor.execute("ALTER TABLE Alertas MODIFY tipo ENUM('critico','predictivo','evento') DEFAULT 'critico'")
+        conexion.commit()
+    finally:
+        cursor.close()
+        conexion.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -128,12 +170,36 @@ def notificar_telegram(maquina_id: str, riesgo: float, diagnostico: str):
 # ─────────────────────────────────────────────────────────────────────────
 # MODELOS PYDANTIC
 # ─────────────────────────────────────────────────────────────────────────
+class Entrada(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, allow_inf_nan=False)
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600000).hex()
+    return f"pbkdf2_sha256$600000${salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    if not stored.startswith("pbkdf2_sha256$"):
+        given, expected = password.encode(), stored.encode()
+        if len(given) != len(expected):
+            return False
+        return hmac.compare_digest(given, expected)
+    try:
+        _, rounds, salt, digest = stored.split("$")
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(rounds)).hex()
+        return hmac.compare_digest(actual, digest)
+    except (ValueError, TypeError):
+        return False
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
 
-class Telemetria(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+class Telemetria(Entrada):
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
 
     maquina_id: str = Field(
         ...,
@@ -142,27 +208,27 @@ class Telemetria(BaseModel):
     voltaje:    float
     temperatura: float  # temperatura del motor
     temp_ambiente: float = 25.0
-    vibracion:  float
-    velocidad:  int
-    humedad:    float
+    vibracion:  float = Field(ge=0)
+    velocidad:  int = Field(ge=0)
+    humedad:    float = Field(ge=0, le=100)
     # Features de ventana opcionales (las envía el nodo edge mejorado)
     temp_media:  float = 0.0
     temp_std:    float = 0.0
     temp_delta:  float = 0.0
     vib_media:   float = 0.0
     vib_delta:   float = 0.0
-    score_riesgo_edge: float = 0.0
+    score_riesgo_edge: float = Field(default=0, ge=0, le=100)
 
-class Alerta(BaseModel):
+class Alerta(Entrada):
     maquina_id: str
-    riesgo:     float
+    riesgo:     float = Field(ge=0, le=100)
     diagnostico: str
-    tipo:       str = "critico"  # por defecto crítico si viene del edge
+    tipo: Literal['critico', 'predictivo', 'evento'] = 'critico'
 
-class MaquinaRegistro(BaseModel):
-    id_area:    int
-    nombre:     str
-    id_maquina: str
+class MaquinaRegistro(Entrada):
+    id_area:    int = Field(gt=0)
+    nombre:     str = Field(min_length=1, max_length=100)
+    id_maquina: str = Field(pattern=r'^[A-Za-z0-9_-]{1,50}$')
     medir_temp: bool
     medir_temp_amb: bool = True
     medir_vib:  bool
@@ -170,12 +236,12 @@ class MaquinaRegistro(BaseModel):
     medir_vel:  bool
     medir_hum:  bool
 
-class AreaRegistro(BaseModel):
-    id_empresa: int
-    nombre:     str
+class AreaRegistro(Entrada):
+    id_empresa: int = Field(gt=0)
+    nombre:     str = Field(min_length=1, max_length=100)
 
-class ConfiguracionMaquina(BaseModel):
-    nombre:      str
+class ConfiguracionMaquina(Entrada):
+    nombre:      str = Field(min_length=1, max_length=100)
     id_area:     int
     temp_alerta: float
     temp_peligro: float
@@ -196,16 +262,65 @@ class ConfiguracionMaquina(BaseModel):
     medir_vel:   bool
     medir_hum:   bool
 
+    @model_validator(mode='after')
+    def validar_umbrales(self):
+        for prefix in ('temp', 'temp_amb', 'vib', 'volt', 'vel', 'hum'):
+            if getattr(self, prefix + '_alerta') >= getattr(self, prefix + '_peligro'):
+                raise ValueError('El umbral de alerta debe ser menor que el de peligro: ' + prefix)
+        return self
+
 class ChatRequest(BaseModel):
     mensaje:    str
     id_maquina: str
 
-class UsuarioRegistro(BaseModel):
-    id_empresa: int
-    nombre:     str
-    email:      str
-    password:   str
-    rol:        str
+class UsuarioRegistro(Entrada):
+    id_empresa: int = Field(gt=0)
+    nombre:     str = Field(min_length=1, max_length=100)
+    email:      str = Field(pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$', max_length=100)
+    password:   str = Field(min_length=8, max_length=128)
+    rol: Literal['instalador', 'jefe', 'participante']
+
+
+class EmpresaRegistro(Entrada):
+    nombre: str = Field(min_length=1, max_length=100)
+    responsable: str = Field(min_length=1, max_length=100)
+    email: str = Field(pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$', max_length=100)
+    password: str = Field(min_length=8, max_length=128)
+
+
+@app.get('/api/health')
+def health():
+    try:
+        conexion = conectar_db()
+        conexion.ping(reconnect=False)
+        conexion.close()
+        return {'status': 'ok', 'database': 'ok'}
+    except mysql.connector.Error:
+        raise HTTPException(503, 'Base de datos no disponible')
+
+
+@app.post('/api/empresas', status_code=201)
+def registrar_empresa(datos: EmpresaRegistro):
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute('INSERT INTO Empresa (nombre) VALUES (%s)', (datos.nombre,))
+        id_empresa = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO Usuario (id_empresa, nombre, email, password_hash, rol) VALUES (%s,%s,%s,%s,'jefe')",
+            (id_empresa, datos.responsable, datos.email.lower(), hash_password(datos.password)),
+        )
+        conexion.commit()
+        return {'id_empresa': id_empresa, 'nombre': datos.nombre}
+    except mysql.connector.IntegrityError:
+        conexion.rollback()
+        raise HTTPException(409, 'El correo ya está registrado')
+    except Exception:
+        conexion.rollback()
+        raise
+    finally:
+        cursor.close()
+        conexion.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -214,22 +329,17 @@ class UsuarioRegistro(BaseModel):
 
 def _etiqueta_estado(row: dict, limites: dict) -> str:
     """Genera etiqueta de estado para un registro histórico dado sus límites."""
-    temp_amb = float(row.get("temp_ambiente", 25.0))
-    if (row["temperatura"] >= limites["temp_peligro"]
-            or row["vibracion"] >= limites["vib_peligro"]
-            or row["voltaje"] >= limites.get("volt_peligro", 130.0)
-            or row["velocidad"] >= limites.get("vel_peligro", 1500)
-            or row["humedad"] >= limites.get("hum_peligro", 80.0)
-            or temp_amb >= limites.get("temp_amb_peligro", 38.0)):
-        return "peligro"
-    if (row["temperatura"] >= limites["temp_alerta"]
-            or row["vibracion"] >= limites["vib_alerta"]
-            or row["voltaje"] >= limites.get("volt_alerta", 100.0)
-            or row["velocidad"] >= limites.get("vel_alerta", 800)
-            or row["humedad"] >= limites.get("hum_alerta", 60.0)
-            or temp_amb >= limites.get("temp_amb_alerta", 30.0)):
-        return "alerta"
-    return "optimo"
+    metrics = (
+        ('temperatura', 'temp'), ('temp_ambiente', 'temp_amb'),
+        ('vibracion', 'vib'), ('voltaje', 'volt'),
+        ('velocidad', 'vel'), ('humedad', 'hum'),
+    )
+    for state, level in [('peligro', 'peligro'), ('alerta', 'alerta')]:
+        for field, prefix in metrics:
+            if limites.get('medir_' + prefix, True) and row.get(field) is not None:
+                if float(row[field]) >= limites[prefix + '_' + level]:
+                    return state
+    return 'optimo'
 
 
 def _caida_relativa(prev_val: float, curr_val: float) -> bool:
@@ -452,6 +562,9 @@ def calcular_prediccion_mantenimiento(
     store = model_store.rul_models.get(id_maquina)
 
     for nombre, key_alerta, key_peligro, key_gbr, key_lo, key_hi in metricas:
+        flag = 'temp' if nombre == 'temperatura' else 'vib'
+        if not limites.get('medir_' + flag, True):
+            continue
         serie = [float(r[nombre]) for r in historial]
         pend, actual = _pendiente_y_actual(serie)
         c_alerta = _ciclos_hasta_umbral(actual, pend, float(limites[key_alerta]))
@@ -479,10 +592,16 @@ def calcular_prediccion_mantenimiento(
     for nombre, key_alerta, key_peligro in [
         ("humedad", "hum_alerta", "hum_peligro"),
         ("voltaje", "volt_alerta", "volt_peligro"),
+        ("velocidad", "vel_alerta", "vel_peligro"),
+        ("temp_ambiente", "temp_amb_alerta", "temp_amb_peligro"),
     ]:
+        if not limites.get('medir_' + key_alerta.removesuffix('_alerta'), True):
+            continue
         serie = [float(r.get(nombre, 0)) for r in historial]
         pend, actual = _pendiente_y_actual(serie)
         c_alerta = _ciclos_hasta_umbral(actual, pend, float(limites[key_alerta]))
+        c_peligro = _ciclos_hasta_umbral(actual, pend, float(limites[key_peligro]))
+        mejor_peligro = min(mejor_peligro, c_peligro)
         if c_alerta < mejor_alerta:
             mejor_alerta = c_alerta
             mejor_alerta_lo = max(0, c_alerta - 3)
@@ -617,21 +736,24 @@ def iniciar_sesion(credenciales: LoginRequest):
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
-        # NOTA: en producción usa bcrypt para el hash. Aquí se mantiene
-        # la comparación directa para compatibilidad con el init.sql actual.
         cursor.execute(
             """
-            SELECT u.id_usuario, u.id_empresa, u.nombre, u.rol,
+            SELECT u.id_usuario, u.id_empresa, u.nombre, u.rol, u.password_hash,
                    e.nombre AS empresa_nombre
             FROM Usuario u
             JOIN Empresa e ON u.id_empresa = e.id_empresa
-            WHERE u.email = %s AND u.password_hash = %s
+            WHERE u.email = %s
             """,
-            (credenciales.email, credenciales.password),
+            (credenciales.email.strip().lower(),),
         )
         usuario = cursor.fetchone()
-        if not usuario:
+        if not usuario or not verify_password(credenciales.password, usuario['password_hash']):
             raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+        stored = usuario.pop('password_hash')
+        if not stored.startswith('pbkdf2_sha256$'):
+            cursor.execute('UPDATE Usuario SET password_hash=%s WHERE id_usuario=%s',
+                           (hash_password(credenciales.password), usuario['id_usuario']))
+            conexion.commit()
         return usuario
     except HTTPException:
         raise
@@ -649,10 +771,13 @@ def registrar_usuario(datos: UsuarioRegistro):
     try:
         cursor.execute(
             "INSERT INTO Usuario (id_empresa, nombre, email, password_hash, rol) VALUES (%s, %s, %s, %s, %s)",
-            (datos.id_empresa, datos.nombre, datos.email, datos.password, datos.rol),
+            (datos.id_empresa, datos.nombre, datos.email.lower(), hash_password(datos.password), datos.rol),
         )
         conexion.commit()
         return {"status": "Usuario registrado exitosamente"}
+    except mysql.connector.IntegrityError:
+        conexion.rollback()
+        raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -671,11 +796,15 @@ def registrar_telemetria(datos: Telemetria):
             """SELECT temp_alerta, temp_peligro, vib_alerta, vib_peligro,
                       volt_alerta, volt_peligro, vel_alerta, vel_peligro,
                       hum_alerta, hum_peligro,
-                      temp_amb_alerta, temp_amb_peligro
+                      temp_amb_alerta, temp_amb_peligro,
+                      medir_temp, medir_temp_amb, medir_vib, medir_volt, medir_vel, medir_hum
                FROM Maquina WHERE id_maquina = %s""",
             (datos.maquina_id,),
         )
         limites = cursor.fetchone()
+        if not limites:
+            raise HTTPException(404, 'Máquina no registrada')
+        evento = None
 
         cursor.execute(
             """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad
@@ -695,58 +824,41 @@ def registrar_telemetria(datos: Telemetria):
         }
 
         if lectura_previa:
-            evento = _detectar_cambio_brusco(lectura_previa, fila_actual)
+            prev_activo = dict(lectura_previa)
+            actual_activo = dict(fila_actual)
+            for field, flag in [('temperatura', 'temp'), ('temp_ambiente', 'temp_amb'),
+                                ('vibracion', 'vib'), ('voltaje', 'volt'),
+                                ('velocidad', 'vel'), ('humedad', 'hum')]:
+                if not limites.get('medir_' + flag, True):
+                    prev_activo[field] = actual_activo[field] = 0
+            evento = _detectar_cambio_brusco(prev_activo, actual_activo)
             if evento:
                 _crear_alerta_evento(cursor, datos.maquina_id, evento)
 
         # Guardar telemetría
         cursor.execute(
             """INSERT INTO SensorData
-               (id_maquina, temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+               (id_maquina, temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad,
+                temp_media, temp_std, temp_delta, vib_media, vib_delta, score_riesgo_edge)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (datos.maquina_id, datos.temperatura, datos.temp_ambiente,
-             datos.vibracion, datos.voltaje, datos.velocidad, datos.humedad),
+             datos.vibracion, datos.voltaje, datos.velocidad, datos.humedad,
+             datos.temp_media, datos.temp_std, datos.temp_delta,
+             datos.vib_media, datos.vib_delta, datos.score_riesgo_edge),
         )
 
-        # ── Determinar estado usando clasificador ML si está disponible ──
-        nuevo_estado = "optimo"
-
-        if datos.maquina_id in model_store.clf_models:
-            pipe = model_store.clf_models[datos.maquina_id]
-            cursor.execute(
-                """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad
-                   FROM SensorData WHERE id_maquina = %s
-                   ORDER BY id_data DESC LIMIT 1 OFFSET 1""",
-                (datos.maquina_id,),
-            )
-            prev_row = cursor.fetchone()
-            X_nuevo = np.array(_features_desde_row(fila_actual, prev_row)).reshape(1, -1)
-            pred = int(pipe.predict(X_nuevo)[0])
-            nuevo_estado = {0: "optimo", 1: "alerta", 2: "peligro"}.get(pred, "optimo")
-        elif limites:
-            # Fallback: lógica de umbrales original
-            if (datos.temperatura >= limites["temp_peligro"]
-                    or datos.vibracion >= limites["vib_peligro"]
-                    or datos.voltaje   >= limites["volt_peligro"]
-                    or datos.velocidad >= limites["vel_peligro"]
-                    or datos.humedad   >= limites["hum_peligro"]
-                    or datos.temp_ambiente >= limites.get("temp_amb_peligro", 38.0)):
-                nuevo_estado = "peligro"
-            elif (datos.temperatura >= limites["temp_alerta"]
-                    or datos.vibracion >= limites["vib_alerta"]
-                    or datos.voltaje   >= limites["volt_alerta"]
-                    or datos.velocidad >= limites["vel_alerta"]
-                    or datos.humedad   >= limites["hum_alerta"]
-                    or datos.temp_ambiente >= limites.get("temp_amb_alerta", 30.0)):
-                nuevo_estado = "alerta"
+        # Los umbrales activos son la fuente de verdad; ML no puede ocultar peligro.
+        nuevo_estado = _etiqueta_estado(fila_actual, limites)
+        if evento and nuevo_estado == 'optimo':
+            nuevo_estado = 'alerta'
 
         cursor.execute(
             """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad
                FROM SensorData WHERE id_maquina = %s
-               ORDER BY id_data ASC""",
+               ORDER BY id_data DESC LIMIT 500""",
             (datos.maquina_id,),
         )
-        historial = cursor.fetchall()
+        historial = list(reversed(cursor.fetchall()))
 
         prediccion_ml = {}
         if limites:
@@ -802,6 +914,9 @@ def registrar_telemetria(datos: Telemetria):
             "prediccion": prediccion_ml,
         }
 
+    except HTTPException:
+        conexion.rollback()
+        raise
     except Exception as e:
         conexion.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -867,9 +982,10 @@ def obtener_datos_maquina(id_maquina: str):
             raise HTTPException(status_code=404, detail="Maquina no encontrada")
 
         cursor.execute(
-            """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad
+            """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad, fecha,
+                      TIMESTAMPDIFF(SECOND, fecha, CURRENT_TIMESTAMP) AS edad_segundos
                FROM SensorData WHERE id_maquina = %s
-               ORDER BY fecha DESC LIMIT 50""",
+               ORDER BY id_data DESC LIMIT 50""",
             (id_maquina,),
         )
         historial = cursor.fetchall()
@@ -922,7 +1038,8 @@ def obtener_prediccion(id_maquina: str):
             """SELECT temp_alerta, temp_peligro, vib_alerta, vib_peligro,
                       volt_alerta, volt_peligro, vel_alerta, vel_peligro,
                       hum_alerta, hum_peligro,
-                      temp_amb_alerta, temp_amb_peligro
+                      temp_amb_alerta, temp_amb_peligro,
+                      medir_temp, medir_temp_amb, medir_vib, medir_volt, medir_vel, medir_hum
                FROM Maquina WHERE id_maquina = %s""",
             (id_maquina,),
         )
@@ -932,10 +1049,10 @@ def obtener_prediccion(id_maquina: str):
 
         cursor.execute(
             """SELECT temperatura, temp_ambiente, vibracion, voltaje, velocidad, humedad
-               FROM SensorData WHERE id_maquina = %s ORDER BY id_data ASC""",
+               FROM SensorData WHERE id_maquina = %s ORDER BY id_data DESC LIMIT 500""",
             (id_maquina,),
         )
-        historial = cursor.fetchall()
+        historial = list(reversed(cursor.fetchall()))
 
         return calcular_prediccion_mantenimiento(id_maquina, historial, limites)
 
@@ -1024,7 +1141,11 @@ def obtener_empresas():
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT id_empresa, nombre FROM Empresa")
+        cursor.execute("""SELECT e.id_empresa, e.nombre,
+        (SELECT COUNT(*) FROM Area a WHERE a.id_empresa=e.id_empresa) AS total_areas,
+        (SELECT COUNT(*) FROM Maquina m JOIN Area a ON a.id_area=m.id_area
+         WHERE a.id_empresa=e.id_empresa) AS total_maquinas
+        FROM Empresa e ORDER BY e.nombre""")
         return cursor.fetchall()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1039,7 +1160,9 @@ def obtener_areas(id_empresa: int):
     cursor   = conexion.cursor(dictionary=True)
     try:
         cursor.execute(
-            "SELECT id_area, nombre FROM Area WHERE id_empresa = %s",
+            """SELECT a.id_area, a.nombre,
+        (SELECT COUNT(*) FROM Maquina m WHERE m.id_area=a.id_area) AS total_maquinas
+        FROM Area a WHERE id_empresa = %s ORDER BY a.nombre""",
             (id_empresa,),
         )
         return cursor.fetchall()
@@ -1056,7 +1179,11 @@ def obtener_maquinas_area(id_area: int):
     cursor   = conexion.cursor(dictionary=True)
     try:
         cursor.execute(
-            "SELECT id_maquina, nombre, estado FROM Maquina WHERE id_area = %s",
+            """SELECT m.*,
+        (SELECT MAX(fecha) FROM SensorData s WHERE s.id_maquina=m.id_maquina) AS ultima_lectura,
+        (SELECT TIMESTAMPDIFF(SECOND, MAX(fecha), CURRENT_TIMESTAMP)
+         FROM SensorData s WHERE s.id_maquina=m.id_maquina) AS edad_segundos
+        FROM Maquina m WHERE id_area = %s ORDER BY nombre""",
             (id_area,),
         )
         return cursor.fetchall()
@@ -1096,6 +1223,9 @@ def crear_area(datos: AreaRegistro):
         id_area = cursor.lastrowid
         conexion.commit()
         return {"id_area": id_area, "status": "Área creada exitosamente"}
+    except mysql.connector.IntegrityError:
+        conexion.rollback()
+        raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1120,6 +1250,9 @@ def registrar_maquina(datos: MaquinaRegistro):
         )
         conexion.commit()
         return {"id_maquina": datos.id_maquina, "status": "Maquina registrada exitosamente"}
+    except mysql.connector.IntegrityError:
+        conexion.rollback()
+        raise HTTPException(409, 'Registro duplicado o empresa/área inexistente')
     except Exception as e:
         conexion.rollback()
         raise HTTPException(status_code=500, detail=str(e))

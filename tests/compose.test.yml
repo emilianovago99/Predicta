@@ -1,0 +1,14 @@
+# Docker Compose >= 2.24.4. Base aislada, sin servicios externos.
+services:
+  mariadb:
+    ports: !override ["127.0.0.1:13307:3306"]
+  api:
+    image: hack-api
+    ports: !override ["127.0.0.1:18000:8000"]
+    environment:
+      GEMINI_API_KEY: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+  web:
+    image: hack-web
+    ports: !override ["127.0.0.1:18080:80"]

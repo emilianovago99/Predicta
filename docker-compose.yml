@@ -1,17 +1,74 @@
-version: "3.8"
 services:
   mariadb:
     image: mariadb:10.11
-    restart: always
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_password_seguro
-      MYSQL_DATABASE: mecanimales_db
-      MYSQL_USER: api_user
-      MYSQL_PASSWORD: api_password_seguro
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root_password_seguro}
+      MARIADB_DATABASE: ${DB_NAME:-mecanimales_db}
+      MARIADB_USER: ${DB_USER:-api_user}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-api_password_seguro}
     ports:
-      - "3307:3306"
+      - "127.0.0.1:${DB_PORT:-3307}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-mecanimales_db}
+      DB_USER: ${DB_USER:-api_user}
+      DB_PASSWORD: ${DB_PASSWORD:-api_password_seguro}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    ports:
+      - "${API_BIND:-0.0.0.0}:${API_PORT:-8000}:8000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8088}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  simulator:
+    build: .
+    profiles: ["demo"]
+    command: ["python", "simulador_edge.py"]
+    environment:
+      API_BASE_URL: http://api:8000
+      MACHINE_ID: ${MACHINE_ID:-M-01}
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   mariadb_data:

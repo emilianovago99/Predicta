@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+venv
+.venv
+**/__pycache__
+**/.dart_tool
+**/build
+**/ephemeral
+**/.gradle
+**/node_modules
+artifacts
+.vscode
+=*
+firmware_config.h

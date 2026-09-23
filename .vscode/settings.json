@@ -15,5 +15,6 @@
       "password": "api_password_seguro",
       "database": "mecanimales_db"
     }
-  ]
+  ],
+  "git.ignoreLimitWarning": true
 }

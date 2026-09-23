@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:async';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
-import 'config/api_config.dart';
+import 'services/api.dart';
+import 'ui/design.dart';
 import 'chat_mecanimal.dart';
 
 class PuntoGrafica {
@@ -26,6 +25,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   String estado = 'optimo';
   String nombre = 'Cargando datos...';
   String diagnostico = 'Sin alertas recientes.';
+  String resumenAlerta = 'Sin alertas recientes.';
 
   double temperatura = 0.0;
   double tempAmbiente = 0.0;
@@ -71,6 +71,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   List<PuntoGrafica> datosGraficaActual = [];
 
   Timer? temporizador;
+  bool _fetching = false, _predicting = false, _loaded = false;
+  String? _error;
+  bool _stale = false;
 
   @override
   void initState() {
@@ -139,12 +142,25 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     );
   }
 
+  String _resumenParaPantalla(String tipoAlerta) {
+    switch (tipoAlerta) {
+      case 'peligro':
+        return 'Se detectó una condición crítica. Revisa las métricas de la máquina.';
+      case 'evento':
+        return 'Se detectó un cambio brusco. Revisa el estado de la máquina.';
+      case 'alerta':
+        return 'Se detectó una condición de alerta. Revisa las métricas de la máquina.';
+      default:
+        return 'Se detectó una alerta. Revisa las métricas de la máquina.';
+    }
+  }
+
   Future<void> obtenerPrediccionML() async {
-    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/prediccion');
+    if (_predicting) return;
+    _predicting = true;
     try {
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      final data = await Api.request('/api/maquinas/${widget.idMaquina}/prediccion');
+      if (mounted) {
         setState(() {
           estadoPrediccion = data['prediccion'];
           rulCiclos = data['rul_ciclos'];
@@ -157,20 +173,24 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
         });
       }
     } catch (e) {
-      estadoPrediccion = 'Error de conectividad ML';
+      if (mounted) setState(() => estadoPrediccion = 'Predicción no disponible');
+    } finally {
+      _predicting = false;
     }
   }
 
   Future<void> obtenerDatosMaquina() async {
-    final url = ApiConfig.uri('/api/maquinas/${widget.idMaquina}/datos');
+    if (_fetching) return;
+    _fetching = true;
 
     try {
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-
+      final data = await Api.request('/api/maquinas/${widget.idMaquina}/datos');
+      if (mounted) {
         setState(() {
+          _loaded = true;
+          _error = null;
+          final history = data['historial'] as List;
+          _stale = history.isNotEmpty && (history.first['edad_segundos'] as num? ?? 999) > 30;
           nombre = data['maquina']['nombre'];
           estado = data['maquina']['estado'];
 
@@ -234,14 +254,16 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
             if (data['ultima_alerta']['tipo'] != null) {
               tipoAlertaUi = data['ultima_alerta']['tipo'].toString();
             }
+            resumenAlerta = _resumenParaPantalla(tipoAlertaUi);
             if (ultimaAlertaProcesada != diagnostico) {
               ultimaAlertaProcesada = diagnostico;
-              lanzarNotificacionPantalla(diagnostico, tipoAlertaUi);
+              lanzarNotificacionPantalla(resumenAlerta, tipoAlertaUi);
             }
           }
 
           if (data['ultima_alerta'] == null) {
             diagnostico = 'Sin alertas recientes.';
+            resumenAlerta = 'Sin alertas recientes.';
             ultimaAlertaProcesada = '';
           }
 
@@ -297,9 +319,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
         });
       }
     } catch (e) {
-      setState(() {
-        nombre = 'Error de conexión';
-      });
+      if (mounted) setState(() { _error = e.toString(); _loaded = true; });
+    } finally {
+      _fetching = false;
     }
   }
 
@@ -486,11 +508,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
       final peligro = tPeligro > tAmbPeligro ? tPeligro : tAmbPeligro;
       final alerta = tAlerta < tAmbAlerta ? tAlerta : tAmbAlerta;
       final vals = valoresParaEscalaGrafica();
-      return maxEscala(
-        alerta,
-        peligro,
-        vals.isEmpty ? [peligro] : vals,
-      );
+      return maxEscala(alerta, peligro, vals.isEmpty ? [peligro] : vals);
     }
     final vals = valoresParaEscalaGrafica();
     return maxEscala(
@@ -507,7 +525,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           isVisible: true,
           start: tAlerta,
           end: tAlerta + 0.01,
-          color: Colors.orange.withOpacity(0.35),
+          color: Colors.orange.withValues(alpha: 0.35),
           text: 'Alerta motor',
           textStyle: const TextStyle(color: Colors.orange, fontSize: 10),
         ),
@@ -515,7 +533,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           isVisible: true,
           start: tPeligro,
           end: tPeligro + 0.01,
-          color: Colors.red.withOpacity(0.4),
+          color: Colors.red.withValues(alpha: 0.4),
           text: 'Crítico motor',
           textStyle: const TextStyle(color: Colors.red, fontSize: 10),
         ),
@@ -523,7 +541,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           isVisible: true,
           start: tAmbAlerta,
           end: tAmbAlerta + 0.01,
-          color: Colors.lightBlue.withOpacity(0.35),
+          color: Colors.lightBlue.withValues(alpha: 0.35),
           text: 'Alerta amb.',
           textStyle: const TextStyle(color: Colors.blue, fontSize: 10),
         ),
@@ -531,7 +549,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
           isVisible: true,
           start: tAmbPeligro,
           end: tAmbPeligro + 0.01,
-          color: Colors.red.shade300.withOpacity(0.4),
+          color: Colors.red.shade300.withValues(alpha: 0.4),
           text: 'Crítico amb.',
           textStyle: TextStyle(color: Colors.red.shade700, fontSize: 10),
         ),
@@ -544,7 +562,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
         isVisible: true,
         start: alerta,
         end: alerta + 0.01,
-        color: Colors.orange.withOpacity(0.35),
+        color: Colors.orange.withValues(alpha: 0.35),
         text: 'Alerta',
         textStyle: const TextStyle(color: Colors.orange, fontSize: 11),
       ),
@@ -552,7 +570,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
         isVisible: true,
         start: peligro,
         end: peligro + 0.01,
-        color: Colors.red.withOpacity(0.45),
+        color: Colors.red.withValues(alpha: 0.45),
         text: 'Crítico',
         textStyle: const TextStyle(color: Colors.red, fontSize: 11),
       ),
@@ -606,6 +624,15 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_loaded || histTemp.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: Text('Monitoreo · ${widget.idMaquina}')),
+        body: !_loaded ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+          : EmptyState(title: _error != null ? 'No pudimos cargar las lecturas' : 'Esperando la primera señal',
+              subtitle: _error ?? 'La máquina está registrada. Conecta el dispositivo y envía sus lecturas con el ID ${widget.idMaquina}.',
+              onRetry: obtenerDatosMaquina),
+      );
+    }
     double anchoPantalla = MediaQuery.of(context).size.width;
     double anchoTarjeta = anchoPantalla;
 
@@ -638,19 +665,25 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     final maxHumEje = maxHum > 100 ? maxHum : 100.0;
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade100,
+      backgroundColor: canvas,
       appBar: AppBar(
         title: Text(nombre),
-        backgroundColor: obtenerColorTarjeta(),
-        foregroundColor: Colors.white,
+        actions: [Padding(padding: const EdgeInsets.only(right: 18), child: StatusPill(
+          _error != null ? 'Sin conexión' : _stale ? 'Sin señal reciente' : 'Señal reciente',
+          color: _error != null || _stale ? muted : accent))],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_error != null || _stale) Padding(padding: const EdgeInsets.only(bottom: 16), child: Card(
+              color: const Color(0xFFFFF4DF), child: Padding(padding: const EdgeInsets.all(16), child: Text(
+                _error ?? 'Sin lecturas en los últimos 30 segundos. Se muestran los últimos datos recibidos.',
+                style: const TextStyle(color: Color(0xFF885D18)),
+              )))),
             Card(
-              elevation: 4,
+              elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -756,7 +789,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        diagnostico,
+                        resumenAlerta,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
@@ -799,7 +832,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        diagnostico,
+                        resumenAlerta,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
@@ -820,7 +853,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -895,7 +928,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -963,7 +996,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -1053,7 +1086,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -1143,7 +1176,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -1225,7 +1258,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                     width: anchoTarjeta,
                     height: 250,
                     child: Card(
-                      elevation: 4,
+                      elevation: 0,
                       child: Padding(
                         padding: const EdgeInsets.all(16.0),
                         child: Column(
@@ -1256,17 +1289,17 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                                       GaugeRange(
                                         startValue: 0,
                                         endValue: humLo,
-                                        color: Colors.green.withOpacity(0.25),
+                                        color: Colors.green.withValues(alpha: 0.25),
                                       ),
                                       GaugeRange(
                                         startValue: humLo,
                                         endValue: humHi,
-                                        color: Colors.orange.withOpacity(0.35),
+                                        color: Colors.orange.withValues(alpha: 0.35),
                                       ),
                                       GaugeRange(
                                         startValue: humHi,
                                         endValue: maxHumEje,
-                                        color: Colors.red.withOpacity(0.35),
+                                        color: Colors.red.withValues(alpha: 0.35),
                                       ),
                                     ],
                                     pointers: <GaugePointer>[
@@ -1358,35 +1391,38 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
                           series: <CartesianSeries<PuntoGrafica, int>>[
                             if (metricaActiva != 'Comparar temps')
                               SplineAreaSeries<PuntoGrafica, int>(
+                                animationDuration: 0,
                                 dataSource: datosGraficaActual,
                                 xValueMapper: (PuntoGrafica datos, _) =>
                                     datos.tiempo,
                                 yValueMapper: (PuntoGrafica datos, _) =>
                                     datos.valor,
-                                color: obtenerColorGrafica().withOpacity(0.3),
+                                color: obtenerColorGrafica().withValues(alpha: 0.3),
                                 borderColor: obtenerColorGrafica(),
                                 borderWidth: 3,
                                 name: metricaActiva,
                               ),
                             if (metricaActiva == 'Comparar temps') ...[
                               SplineAreaSeries<PuntoGrafica, int>(
+                                animationDuration: 0,
                                 dataSource: histTemp,
                                 xValueMapper: (PuntoGrafica datos, _) =>
                                     datos.tiempo,
                                 yValueMapper: (PuntoGrafica datos, _) =>
                                     datos.valor,
-                                color: Colors.red.withOpacity(0.25),
+                                color: Colors.red.withValues(alpha: 0.25),
                                 borderColor: Colors.red,
                                 borderWidth: 2,
                                 name: 'Motor',
                               ),
                               SplineAreaSeries<PuntoGrafica, int>(
+                                animationDuration: 0,
                                 dataSource: histTempAmb,
                                 xValueMapper: (PuntoGrafica datos, _) =>
                                     datos.tiempo,
                                 yValueMapper: (PuntoGrafica datos, _) =>
                                     datos.valor,
-                                color: Colors.lightBlue.withOpacity(0.25),
+                                color: Colors.lightBlue.withValues(alpha: 0.25),
                                 borderColor: Colors.lightBlue,
                                 borderWidth: 2,
                                 name: 'Ambiente',

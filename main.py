@@ -6,6 +6,10 @@ from fastapi.exceptions import RequestValidationError
 from database import conectar_db
 from migrate import migrate as migrar_esquema
 from settings import validate_settings, cors_origins
+from notifications import summarize, record_incident, notification_loop
+from device_setup import router as setup_router
+import json
+import threading
 from security import (hash_password, verify_password, issue_token, get_current_user,
     require_editor, require_installer, check_company, check_area, check_machine,
     get_device, check_device, machine_reader, rotate_device_key)
@@ -30,8 +34,6 @@ import time
 import hashlib
 
 load_dotenv()
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
 
 modelo_gemini = None
@@ -90,16 +92,23 @@ model_store = ModelStore()
 async def lifespan(app: FastAPI):
     validate_settings()
     migrar_esquema()
+    stop_notifications = threading.Event()
+    notifier = threading.Thread(target=notification_loop, args=(stop_notifications,), daemon=True)
+    notifier.start()
     print("=== Predicta API iniciada ===")
     yield
+    stop_notifications.set()
+    notifier.join(timeout=10)
     print("=== Predicta API detenida ===")
 
 app = FastAPI(lifespan=lifespan, docs_url='/docs' if os.getenv('APP_ENV') != 'production' else None,
               redoc_url=None, openapi_url='/openapi.json' if os.getenv('APP_ENV') != 'production' else None)
+app.include_router(setup_router)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -108,24 +117,6 @@ app.add_middleware(
 # ─────────────────────────────────────────────────────────────────────────
 # BASE DE DATOS
 # ─────────────────────────────────────────────────────────────────────────
-def notificar_telegram(maquina_id: str, riesgo: float, diagnostico: str):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    icono = "🔴" if riesgo > 90.0 else "🟠"
-    texto = (
-        f"{icono} *PREDICTA ALERTA*\n\n"
-        f"*Máquina:* {maquina_id}\n"
-        f"*Riesgo:* {riesgo:.0f}/100\n"
-        f"*Diagnóstico:* {diagnostico}"
-    )
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": texto, "parse_mode": "Markdown"},
-            timeout=5,
-        )
-    except Exception:
-        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -385,17 +376,6 @@ def _detectar_cambio_brusco(prev: dict, curr: dict) -> Optional[dict]:
     return {"metricas": metricas, "diagnostico": diagnostico, "riesgo": riesgo}
 
 
-def _crear_alerta_evento(cursor, id_maquina: str, evento: dict) -> None:
-    cursor.execute(
-        """INSERT INTO Alertas (id_maquina, riesgo, diagnostico, tipo)
-           VALUES (%s, %s, %s, 'evento')""",
-        (id_maquina, evento["riesgo"], evento["diagnostico"]),
-    )
-    cursor.execute(
-        "UPDATE Maquina SET estado = 'alerta' WHERE id_maquina = %s AND estado = 'optimo'",
-        (id_maquina,),
-    )
-    notificar_telegram(id_maquina, evento["riesgo"], evento["diagnostico"])
 
 
 def _features_desde_row(row: dict, prev: Optional[dict] = None) -> list:
@@ -579,44 +559,6 @@ def calcular_prediccion_mantenimiento(
     }
 
 
-def _crear_alerta_preventiva_servidor(
-    cursor,
-    id_maquina: str,
-    pred: dict,
-    limites: dict,
-) -> None:
-    """Registra alerta predictiva en BD si aun no se envio recientemente."""
-    n_actual = model_store.ultima_alerta_preventiva.get(id_maquina, -999)
-    cursor.execute(
-        "SELECT COUNT(*) AS total FROM SensorData WHERE id_maquina = %s",
-        (id_maquina,),
-    )
-    n_total = cursor.fetchone()["total"]
-    if n_total - n_actual < 5:
-        return
-
-    ciclos = pred["rul_alerta_ciclos"]
-    metrica = pred.get("metrica_critica", "sensores")
-    diagnostico = (
-        f"[ML Preventivo] Se proyecta zona AMARILLA (alerta) en aproximadamente "
-        f"{ciclos} ciclos. Metrica critica: {metrica}. "
-        f"Umbrales configurados: temp alerta {limites['temp_alerta']}C, "
-        f"vib alerta {limites['vib_alerta']} mm/s. "
-        f"Accion: programar mantenimiento antes de llegar a peligro."
-    )
-    riesgo = max(45.0, min(75.0, 80.0 - (ciclos * 3)))
-
-    cursor.execute(
-        """INSERT INTO Alertas (id_maquina, riesgo, diagnostico, tipo)
-           VALUES (%s, %s, %s, 'predictivo')""",
-        (id_maquina, riesgo, diagnostico),
-    )
-    cursor.execute(
-        "UPDATE Maquina SET estado = 'alerta' WHERE id_maquina = %s AND estado = 'optimo'",
-        (id_maquina,),
-    )
-    model_store.ultima_alerta_preventiva[id_maquina] = n_total
-    notificar_telegram(id_maquina, riesgo, diagnostico)
 
 
 def entrenar_modelos_maquina(id_maquina: str, historial: list, limites: dict):
@@ -683,7 +625,7 @@ def entrenar_modelos_maquina(id_maquina: str, historial: list, limites: dict):
 # ─────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/login")
-def iniciar_sesion(credenciales: LoginRequest):
+def iniciar_sesion(credenciales: LoginRequest, response: Response):
     conexion = conectar_db()
     cursor   = conexion.cursor(dictionary=True)
     try:
@@ -701,7 +643,11 @@ def iniciar_sesion(credenciales: LoginRequest):
         if not usuario or not verify_password(credenciales.password, usuario['password_hash']):
             raise HTTPException(status_code=401, detail="Credenciales incorrectas")
         usuario.pop('password_hash')
-        return issue_token(usuario)
+        result = issue_token(usuario)
+        response.set_cookie('predicta_session', result['access_token'], httponly=True,
+                            secure=os.getenv('APP_ENV') == 'production', samesite='lax',
+                            max_age=result['expires_in'], path='/api')
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -748,7 +694,7 @@ def registrar_telemetria(datos: Telemetria, device=Depends(get_device)):
                       volt_alerta, volt_peligro, vel_alerta, vel_peligro,
                       hum_alerta, hum_peligro,
                       temp_amb_alerta, temp_amb_peligro,
-                      medir_temp, medir_temp_amb, medir_vib, medir_volt, medir_vel, medir_hum
+                      medir_temp, medir_temp_amb, medir_vib, medir_volt, medir_vel, medir_hum, alert_cooldown_seconds
                FROM Maquina WHERE id_maquina = %s FOR UPDATE""",
             (datos.maquina_id,),
         )
@@ -790,8 +736,6 @@ def registrar_telemetria(datos: Telemetria, device=Depends(get_device)):
                 if not limites.get('medir_' + flag, True):
                     prev_activo[field] = actual_activo[field] = 0
             evento = _detectar_cambio_brusco(prev_activo, actual_activo)
-            if evento:
-                _crear_alerta_evento(cursor, datos.maquina_id, evento)
 
         # Guardar telemetría
         cursor.execute(
@@ -824,31 +768,10 @@ def registrar_telemetria(datos: Telemetria, device=Depends(get_device)):
                 datos.maquina_id, historial, limites
             )
 
-        if nuevo_estado == "peligro" and limites:
-            # Crear alerta crítica cuando se detecta estado de peligro
-            metrica_critica = prediccion_ml.get("metrica_critica", "sensores")
-            diagnostico = (
-                f"[CRÍTICO] Se ha detectado condición de peligro inmediato. "
-                f"Temperatura motor: {datos.temperatura}°C (peligro > {limites['temp_peligro']}°C), "
-                f"Ambiente: {datos.temp_ambiente}°C, "
-                f"Vibración: {datos.vibracion} mm/s (peligro > {limites['vib_peligro']} mm/s), "
-                f"Humedad: {datos.humedad}% (peligro > {limites.get('hum_peligro', 80.0)}%). "
-                f"ACCIÓN INMEDIATA: Detener máquina y revisar sistema."
-            )
-            riesgo = 95.0
-            cursor.execute(
-                """INSERT INTO Alertas (id_maquina, riesgo, diagnostico, tipo)
-                   VALUES (%s, %s, %s, 'critico')""",
-                (datos.maquina_id, riesgo, diagnostico),
-            )
-            notificar_telegram(datos.maquina_id, riesgo, diagnostico)
-        elif (
-            nuevo_estado == "optimo"
-            and prediccion_ml.get("requiere_alerta_preventiva")
-            and limites
-        ):
-            nuevo_estado = "alerta"
-            _crear_alerta_preventiva_servidor(cursor, datos.maquina_id, prediccion_ml, limites)
+        summary = summarize(fila_actual, limites, event=bool(evento), prediction=prediccion_ml)
+        record_incident(cursor, datos.maquina_id, summary, limites['alert_cooldown_seconds'])
+        if summary['severity'] == 1 and nuevo_estado == 'optimo':
+            nuevo_estado = 'alerta'
 
         cursor.execute(
             "UPDATE Maquina SET estado = %s WHERE id_maquina = %s",
@@ -887,35 +810,21 @@ def registrar_telemetria(datos: Telemetria, device=Depends(get_device)):
 def registrar_alerta(alerta: Alerta, device=Depends(get_device)):
     check_device(device, alerta.maquina_id)
     conexion = conectar_db()
-    cursor   = conexion.cursor()
+    cursor = conexion.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT id_maquina FROM Maquina WHERE id_maquina = %s",
-            (alerta.maquina_id,),
-        )
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Maquina no registrada")
-
-        cursor.execute(
-            "INSERT INTO Alertas (id_maquina, riesgo, diagnostico, tipo) VALUES (%s, %s, %s, %s)",
-            (alerta.maquina_id, alerta.riesgo, alerta.diagnostico, alerta.tipo),
-        )
-
-        estado_nuevo = "peligro" if alerta.riesgo > 90.0 else "alerta"
-        cursor.execute(
-            "UPDATE Maquina SET estado = %s WHERE id_maquina = %s",
-            (estado_nuevo, alerta.maquina_id),
-        )
+        cursor.execute('SELECT * FROM Maquina WHERE id_maquina=%s FOR UPDATE', (alerta.maquina_id,))
+        machine = cursor.fetchone()
+        if not machine:
+            raise HTTPException(404, 'Máquina no registrada')
+        cursor.execute('SELECT * FROM SensorData WHERE id_maquina=%s ORDER BY id_data DESC LIMIT 1', (alerta.maquina_id,))
+        reading = cursor.fetchone() or {}
+        summary = summarize(reading, machine, edge_kind=alerta.tipo)
+        record_incident(cursor, alerta.maquina_id, summary, machine['alert_cooldown_seconds'])
         conexion.commit()
-
-        notificar_telegram(alerta.maquina_id, alerta.riesgo, alerta.diagnostico)
-        return {"status": "Alerta registrada y estado actualizado"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
+        return {'status': 'Alerta agrupada', 'summary': summary}
+    except Exception:
         conexion.rollback()
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
+        raise
     finally:
         cursor.close()
         conexion.close()
@@ -950,12 +859,9 @@ def obtener_datos_maquina(id_maquina: str, user=Depends(get_current_user)):
         )
         historial = cursor.fetchall()
 
-        cursor.execute(
-            """SELECT diagnostico, fecha, tipo FROM Alertas
-               WHERE id_maquina = %s ORDER BY fecha DESC LIMIT 1""",
-            (id_maquina,),
-        )
-        ultima_alerta = cursor.fetchone()
+        cursor.execute('SELECT payload FROM MachineAlert WHERE id_maquina=%s', (id_maquina,))
+        incident = cursor.fetchone()
+        ultima_alerta = json.loads(incident['payload']) if incident else None
 
         # ── Anomalía con Isolation Forest del servidor ───────────────────
         anomalia_info = None
@@ -1436,6 +1342,12 @@ async def validation_error(request, exc):
 
 @app.middleware('http')
 async def private_response_headers(request, call_next):
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and (request.url.path == '/api/login' or request.cookies.get('predicta_session')) and not request.headers.get('authorization'):
+        origin = request.headers.get('origin')
+        if origin and origin not in cors_origins():
+            return JSONResponse(status_code=403, content={'detail': 'Origen no permitido'})
+        if request.headers.get('sec-fetch-site') == 'cross-site':
+            return JSONResponse(status_code=403, content={'detail': 'Origen no permitido'})
     response = await call_next(request)
     if request.url.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
@@ -1465,3 +1377,10 @@ def current_profile(user=Depends(get_current_user)):
     finally:
         cursor.close()
         conexion.close()
+
+
+@app.post('/api/logout')
+def logout(response: Response, user=Depends(get_current_user)):
+    response.delete_cookie('predicta_session', path='/api', httponly=True,
+                           secure=os.getenv('APP_ENV') == 'production', samesite='lax')
+    return {'status': 'Sesión cerrada'}

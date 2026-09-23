@@ -11,6 +11,7 @@ services:
       GEMINI_API_KEY: ""
       TELEGRAM_BOT_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
+      TELEGRAM_DELIVERY_ENABLED: "false"
   web:
     image: predicta-validation-web
     ports: !override ["127.0.0.1:18080:80"]

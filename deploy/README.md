@@ -78,7 +78,7 @@ Para Flutter con recarga:
 ```bash
 cd mantenimiento_predictivo
 flutter pub get
-flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://127.0.0.1:8000
+flutter run -d chrome --web-port=5173 --dart-define=API_BASE_URL=http://localhost:8000
 # Android emulator (debug):
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
 ```
@@ -164,7 +164,8 @@ JWT HS256 verifica firma, emisor, audiencia y expiración. El rol/empresa se rel
 en DB. No hay refresh tokens: al expirar se inicia sesión nuevamente. Cerrar sesión
 borra el token local; un token copiado sigue válido hasta expirar. Para revocar
 todas las sesiones de inmediato, cambiar JWT_SECRET y recrear API.
-Web guarda el token solo en memoria; recargar requiere login. Android/iOS usan
+Web conserva la sesión al recargar con una cookie HttpOnly (Secure en producción,
+SameSite=Lax), sin localStorage; expira según JWT_EXPIRES_SECONDS. Android/iOS usan
 flutter_secure_storage, restauran sesión con /api/me y no guardan passwords.
 Los endpoints health/ready son públicos y no incluyen datos de usuarios.
 

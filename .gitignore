@@ -34,3 +34,4 @@ backups/
 id_rsa
 id_ed25519
 *.sql.gz
+.device-credentials.json

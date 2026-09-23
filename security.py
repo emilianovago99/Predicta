@@ -5,7 +5,7 @@ import os
 import secrets
 import time
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from database import conectar_db
 
@@ -54,8 +54,9 @@ def query_one(sql, params):
         db.close()
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
-    token = token_value(credentials)
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), request: Request = None):
+    token = request.cookies.get('predicta_session') if not credentials and request is not None else None
+    token = token or token_value(credentials)
     try:
         claims = jwt.decode(token, os.environ['JWT_SECRET'], algorithms=['HS256'],
                             issuer='predicta', audience='predicta-users',
@@ -114,12 +115,12 @@ def check_device(device, machine_id):
         raise HTTPException(403, 'Credencial de otra máquina')
 
 
-def machine_reader(id_maquina: str, credentials: HTTPAuthorizationCredentials = Depends(bearer)):
+def machine_reader(id_maquina: str, request: Request, credentials: HTTPAuthorizationCredentials = Depends(bearer)):
     # Existing simulators read thresholds using their device credential.
-    if token_value(credentials).startswith('pd_'):
+    if credentials and token_value(credentials).startswith('pd_'):
         check_device(get_device(credentials), id_maquina)
     else:
-        check_machine(get_current_user(credentials), id_maquina)
+        check_machine(get_current_user(credentials, request), id_maquina)
 
 
 def rotate_device_key(machine_id):

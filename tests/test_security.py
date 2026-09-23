@@ -36,12 +36,11 @@ class SecurityTests(unittest.TestCase):
                 security.get_current_user(self.credentials(issued['access_token'] + 'tampered'))
 
     def test_all_private_routes_require_credentials(self):
-        for route in main.app.routes:
-            path = route.path
+        for path, operations in main.app.openapi()['paths'].items():
             if not path.startswith('/api/') or path in ('/api/health', '/api/ready', '/api/login'):
                 continue
-            path = path.replace('{id_maquina}', 'M-01').replace('{id_empresa}', '2').replace('{id_area}', '1')
-            for method in route.methods:
+            path = path.replace('{id_maquina}', 'M-01').replace('{id_empresa}', '2').replace('{id_area}', '1').replace('{channel_id}', '1')
+            for method in (m.upper() for m in operations if m in ('get', 'post', 'put', 'delete', 'patch')):
                 with self.subTest(path=path, method=method):
                     response = self.client.request(method, path, json={} if method in ('POST', 'PUT') else None)
                     self.assertEqual(response.status_code, 401)
@@ -69,7 +68,7 @@ class SecurityTests(unittest.TestCase):
         db.cursor.return_value.fetchone.side_effect = [{'temp_alerta': 50}, {'id_data': 1}]
         data = main.Telemetria(maquina_id='M-01', temperatura=99, vibracion=1, voltaje=12,
                               velocidad=50, humedad=20, sequence=1, boot_id='boot')
-        with patch.object(main, 'conectar_db', return_value=db), patch.object(main, 'notificar_telegram') as notify:
+        with patch.object(main, 'conectar_db', return_value=db), patch.object(main, 'record_incident') as notify:
             self.assertTrue(main.registrar_telemetria(data, {'id_maquina': 'M-01'})['duplicate'])
             notify.assert_not_called()
         db.commit.assert_not_called()
@@ -90,6 +89,19 @@ class SecurityTests(unittest.TestCase):
     def test_production_cors(self):
         with patch.dict(os.environ, {'APP_ENV': 'production', 'DOMAIN': 'example.com', 'CORS_ORIGINS': '*'}):
             self.assertEqual(cors_origins(), ['https://example.com'])
+
+    def test_cookie_session_and_logout(self):
+        issued = security.issue_token(self.user)
+        self.client.cookies.set('predicta_session', issued['access_token'])
+        with patch.object(security, 'query_one', return_value=self.user):
+            response = self.client.post('/api/logout', headers={'Origin': 'http://localhost:8088'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Max-Age=0', response.headers['set-cookie'])
+
+    def test_cookie_mutation_rejects_foreign_origin(self):
+        self.client.cookies.set('predicta_session', security.issue_token(self.user)['access_token'])
+        response = self.client.put('/api/maquinas/M-01/notifications', json={}, headers={'Origin': 'https://other.example'})
+        self.assertEqual(response.status_code, 403)
 
     def test_health_unavailable(self):
         with patch.object(main, 'conectar_db', side_effect=main.mysql.connector.Error('private-db-host')):

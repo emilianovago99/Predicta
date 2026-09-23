@@ -34,6 +34,7 @@ class _WorkspaceState extends State<Workspace> {
   List<dynamic> treeAreas = [];
   final Map<int, List<dynamic>> treeMachines = {};
   final Set<int> expandedTreeAreas = {};
+  final Set<String> updatingTreeMachines = {};
   bool get installer => widget.user['rol'] == 'instalador';
   bool get canEdit => widget.user['rol'] != 'participante';
   int get level => company == null ? 0 : area == null ? 1 : 2;
@@ -132,6 +133,70 @@ class _WorkspaceState extends State<Workspace> {
     )).then((_) { if (mounted) load(silent: true); });
   }
 
+  Future<void> updateTreeMachine(Map<String, dynamic> machine, {
+    String? name, int? targetAreaId,
+  }) async {
+    final machineId = machine['id_maquina'].toString();
+    if (updatingTreeMachines.contains(machineId)) return;
+    setState(() => updatingTreeMachines.add(machineId));
+    try {
+      final config = Map<String, dynamic>.from(
+        await Api.request('/api/maquinas/$machineId/config'),
+      );
+      if (name != null) config['nombre'] = name;
+      if (targetAreaId != null) config['id_area'] = targetAreaId;
+      await Api.request('/api/maquinas/$machineId/config', body: config, put: true);
+
+      final openAreas = expandedTreeAreas.toList();
+      treeMachines.clear();
+      await loadTreeAreas();
+      for (final areaId in openAreas) {
+        await loadTreeMachines(areaId, showError: false);
+      }
+      await load(silent: true);
+      if (mounted) {
+        final message = targetAreaId != null ? 'Máquina movida correctamente' : 'Nombre actualizado correctamente';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => updatingTreeMachines.remove(machineId));
+    }
+  }
+
+  Future<void> renameTreeMachine(Map<String, dynamic> machine) async {
+    final controller = TextEditingController(text: machine['nombre'].toString());
+    final formKey = GlobalKey<FormState>();
+    final name = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Cambiar nombre de máquina'),
+      content: Form(key: formKey, child: TextFormField(
+        controller: controller, autofocus: true, maxLength: 100,
+        decoration: const InputDecoration(labelText: 'Nombre'),
+        validator: (value) => value == null || value.trim().isEmpty ? 'Escribe un nombre' : null,
+        onFieldSubmitted: (_) {
+          if (formKey.currentState!.validate()) Navigator.pop(context, controller.text.trim());
+        },
+      )),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        FilledButton(onPressed: () {
+          if (formKey.currentState!.validate()) Navigator.pop(context, controller.text.trim());
+        }, child: const Text('Guardar')),
+      ],
+    ));
+    controller.dispose();
+    if (name != null && name != machine['nombre'] && mounted) {
+      await updateTreeMachine(machine, name: name);
+    }
+  }
+
+  Future<void> moveTreeMachine(Map<String, dynamic> machine, int targetAreaId) async {
+    final currentAreaId = (machine['id_area'] as num).toInt();
+    if (currentAreaId == targetAreaId) return;
+    await updateTreeMachine(machine, targetAreaId: targetAreaId);
+  }
+
   Future<void> create({String? userRole, Map<String, dynamic>? machine}) async {
     Map<String, dynamic>? config;
     if (machine != null) {
@@ -202,7 +267,7 @@ class _WorkspaceState extends State<Workspace> {
   ));
 
   Widget treeItem({required String label, required IconData icon, required bool selected,
-    required VoidCallback onTap, bool? expanded, double indent = 0}) => Padding(
+    required VoidCallback onTap, bool? expanded, double indent = 0, Widget? trailing}) => Padding(
     padding: EdgeInsets.only(left: indent, bottom: 4),
     child: Material(
       color: selected ? const Color(0xFFE8F4F0) : Colors.transparent,
@@ -213,7 +278,7 @@ class _WorkspaceState extends State<Workspace> {
         leading: Icon(icon, size: 19, color: selected ? accent : muted),
         title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: 13, color: selected ? accent : muted, fontWeight: selected ? FontWeight.w700 : FontWeight.w400)),
-        trailing: expanded == null ? null : Icon(expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded, size: 18, color: muted),
+        trailing: trailing ?? (expanded == null ? null : Icon(expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded, size: 18, color: muted)),
       ),
     ),
   );
@@ -223,21 +288,58 @@ class _WorkspaceState extends State<Workspace> {
     final expanded = expandedTreeAreas.contains(id);
     final machines = treeMachines[id];
     return [
-      treeItem(
-        label: treeArea['nombre'].toString(), icon: Icons.account_tree_outlined,
-        selected: area?['id_area'] == id, expanded: expanded, indent: 12,
-        onTap: () => toggleTreeArea(treeArea),
+      DragTarget<Map<String, dynamic>>(
+        onWillAcceptWithDetails: (details) => canEdit && (details.data['id_area'] as num).toInt() != id,
+        onAcceptWithDetails: (details) => moveTreeMachine(details.data, id),
+        builder: (context, candidates, rejected) => DecoratedBox(
+          decoration: BoxDecoration(
+            color: candidates.isEmpty ? Colors.transparent : accent.withValues(alpha: .10),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: treeItem(
+            label: treeArea['nombre'].toString(), icon: Icons.account_tree_outlined,
+            selected: area?['id_area'] == id, expanded: expanded, indent: 12,
+            onTap: () => toggleTreeArea(treeArea),
+          ),
+        ),
       ),
       if (expanded && machines == null)
         const Padding(padding: EdgeInsets.fromLTRB(52, 8, 0, 12), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))),
       if (expanded && machines != null)
         for (final rawMachine in machines)
-          treeItem(
-            label: rawMachine['nombre'].toString(), icon: Icons.precision_manufacturing_outlined,
-            selected: false, indent: 26,
-            onTap: () => openTreeMachine(Map<String, dynamic>.from(rawMachine)),
+          Draggable<Map<String, dynamic>>(
+            data: Map<String, dynamic>.from(rawMachine),
+            maxSimultaneousDrags: canEdit && !updatingTreeMachines.contains(rawMachine['id_maquina'].toString()) ? 1 : 0,
+            feedback: Material(
+              elevation: 6, borderRadius: BorderRadius.circular(10), color: Colors.white,
+              child: Container(width: 190, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.precision_manufacturing_outlined, size: 18, color: accent),
+                  const SizedBox(width: 8), Expanded(child: Text(rawMachine['nombre'].toString(), overflow: TextOverflow.ellipsis)),
+                ])),
+            ),
+            childWhenDragging: Opacity(opacity: .35, child: machineTreeItem(Map<String, dynamic>.from(rawMachine))),
+            child: machineTreeItem(Map<String, dynamic>.from(rawMachine)),
           ),
     ];
+  }
+
+  Widget machineTreeItem(Map<String, dynamic> machine) {
+    final machineId = machine['id_maquina'].toString();
+    final updating = updatingTreeMachines.contains(machineId);
+    return treeItem(
+      label: machine['nombre'].toString(), icon: Icons.precision_manufacturing_outlined,
+      selected: false, indent: 26,
+      onTap: updating ? () {} : () => openTreeMachine(machine),
+      trailing: updating
+        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+        : IconButton(
+            tooltip: 'Cambiar nombre', padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+            onPressed: canEdit ? () => renameTreeMachine(machine) : null,
+            icon: const Icon(Icons.edit_outlined, size: 16),
+          ),
+    );
   }
 
   Widget stat(String value, String label, IconData icon, Color color) => Container(

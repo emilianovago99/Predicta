@@ -273,6 +273,106 @@ class _WorkspaceState extends State<Workspace> {
     await updateTreeMachine(machine, targetAreaId: targetAreaId);
   }
 
+  Future<void> deleteMachine(Map<String, dynamic> machine) async {
+    final machineId = machine['id_maquina'].toString();
+    final machineName = machine['nombre']?.toString() ?? machineId;
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('¿Eliminar máquina?'),
+      content: Text('Se eliminará “$machineName” ($machineId), junto con su telemetría, alertas y credenciales. Esta acción es permanente.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+          onPressed: () => Navigator.pop(context, true), child: const Text('Eliminar definitivamente'),
+        ),
+      ],
+    ));
+    if (confirmed != true || !mounted) return;
+    setState(() => updatingTreeMachines.add(machineId));
+    try {
+      await Api.request('/api/maquinas/$machineId', delete: true);
+      if (activeMachineId == machineId) activeMachineId = null;
+      final areaId = (machine['id_area'] as num?)?.toInt();
+      if (areaId != null) {
+        treeMachines[areaId]?.removeWhere((item) => item['id_maquina'].toString() == machineId);
+      }
+      await loadTreeAreas();
+      await load(silent: true);
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Máquina eliminada correctamente')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => updatingTreeMachines.remove(machineId));
+    }
+  }
+
+  Future<void> renameTreeArea(Map<String, dynamic> selectedArea) async {
+    final controller = TextEditingController(text: selectedArea['nombre'].toString());
+    final formKey = GlobalKey<FormState>();
+    final name = await showDialog<String>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Cambiar nombre del área'),
+      content: Form(key: formKey, child: TextFormField(
+        controller: controller, autofocus: true, maxLength: 100,
+        decoration: const InputDecoration(labelText: 'Nombre del área'),
+        validator: (value) => value == null || value.trim().isEmpty ? 'Escribe un nombre' : null,
+        onFieldSubmitted: (_) {
+          if (formKey.currentState!.validate()) Navigator.pop(context, controller.text.trim());
+        },
+      )),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        FilledButton(onPressed: () {
+          if (formKey.currentState!.validate()) Navigator.pop(context, controller.text.trim());
+        }, child: const Text('Guardar')),
+      ],
+    ));
+    controller.dispose();
+    if (name == null || name == selectedArea['nombre'] || !mounted) return;
+    try {
+      await Api.request('/api/areas/${selectedArea['id_area']}', body: {'nombre': name}, put: true);
+      if (area?['id_area'] == selectedArea['id_area']) {
+        setState(() => area = {...area!, 'nombre': name});
+      }
+      await loadTreeAreas();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Área actualizada correctamente')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  Future<void> deleteTreeArea(Map<String, dynamic> selectedArea) async {
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('¿Eliminar área?'),
+      content: Text('Se eliminará “${selectedArea['nombre']}”. Solo es posible si no contiene máquinas.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+          onPressed: () => Navigator.pop(context, true), child: const Text('Eliminar'),
+        ),
+      ],
+    ));
+    if (confirmed != true || !mounted) return;
+    try {
+      final id = (selectedArea['id_area'] as num).toInt();
+      await Api.request('/api/areas/$id', delete: true);
+      treeMachines.remove(id);
+      expandedTreeAreas.remove(id);
+      if (area?['id_area'] == id) {
+        navigate(1);
+      } else {
+        await loadTreeAreas();
+        if (level == 1) await load(silent: true);
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Área eliminada correctamente')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
   Future<void> create({String? userRole, Map<String, dynamic>? machine}) async {
     Map<String, dynamic>? config;
     if (machine != null) {
@@ -376,6 +476,22 @@ class _WorkspaceState extends State<Workspace> {
             label: treeArea['nombre'].toString(), icon: Icons.account_tree_outlined,
             selected: area?['id_area'] == id, expanded: expanded, indent: 12,
             onTap: () => toggleTreeArea(treeArea),
+            trailing: canEdit ? SizedBox(width: 54, child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              SizedBox(width: 28, height: 32, child: PopupMenuButton<String>(
+                  tooltip: 'Opciones del área', padding: EdgeInsets.zero,
+                  onSelected: (value) {
+                    if (value == 'rename') renameTreeArea(treeArea);
+                    if (value == 'delete') deleteTreeArea(treeArea);
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'rename', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Cambiar nombre'), contentPadding: EdgeInsets.zero)),
+                    PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Eliminar'), contentPadding: EdgeInsets.zero)),
+                  ],
+                  icon: const Icon(Icons.more_vert_rounded, size: 17),
+                ),
+              ),
+              Icon(expanded ? Icons.expand_more_rounded : Icons.chevron_right_rounded, size: 18, color: muted),
+            ])) : null,
           ),
         ),
       ),
@@ -409,12 +525,18 @@ class _WorkspaceState extends State<Workspace> {
       onTap: updating ? () {} : () => openTreeMachine(machine),
       trailing: updating
         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-        : IconButton(
-            tooltip: 'Cambiar nombre', padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-            onPressed: canEdit ? () => renameTreeMachine(machine) : null,
-            icon: const Icon(Icons.edit_outlined, size: 16),
-          ),
+        : canEdit ? SizedBox(width: 28, height: 32, child: PopupMenuButton<String>(
+            tooltip: 'Opciones de la máquina', padding: EdgeInsets.zero,
+            onSelected: (value) {
+              if (value == 'rename') renameTreeMachine(machine);
+              if (value == 'delete') deleteMachine(machine);
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'rename', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Cambiar nombre'), contentPadding: EdgeInsets.zero)),
+              PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Eliminar'), contentPadding: EdgeInsets.zero)),
+            ],
+            icon: const Icon(Icons.more_vert_rounded, size: 17),
+          )) : null,
     );
   }
 
@@ -448,7 +570,20 @@ class _WorkspaceState extends State<Workspace> {
         child: Icon([Icons.business_outlined, Icons.layers_outlined, Icons.precision_manufacturing_outlined][level], color: ink, size: 24)),
         const Spacer(),
         if (isMachine && canEdit) IconButton(tooltip: 'Telegram e instalación', onPressed: () => showDialog(context: context, builder: (_) => MachineSetup(machineId: item['id_maquina'], installer: installer)), icon: const Icon(Icons.cable_rounded, color: accent, size: 20)),
-        if (isMachine && canEdit) IconButton(tooltip: 'Configurar sensores y umbrales', onPressed: () => create(machine: item), icon: const Icon(Icons.tune_rounded, color: muted, size: 20))
+        if (isMachine && canEdit) IconButton(tooltip: 'Configurar sensores y umbrales', onPressed: () => create(machine: item), icon: const Icon(Icons.tune_rounded, color: muted, size: 20)),
+        if (isMachine && canEdit) IconButton(tooltip: 'Eliminar máquina', onPressed: () => deleteMachine(item), icon: Icon(Icons.delete_outline, color: Theme.of(context).colorScheme.error, size: 20))
+        else if (!isMachine && level == 1 && canEdit) PopupMenuButton<String>(
+          tooltip: 'Opciones del área',
+          onSelected: (value) {
+            if (value == 'rename') renameTreeArea(item);
+            if (value == 'delete') deleteTreeArea(item);
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'rename', child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Cambiar nombre'), contentPadding: EdgeInsets.zero)),
+            PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Eliminar'), contentPadding: EdgeInsets.zero)),
+          ],
+          icon: const Icon(Icons.more_vert_rounded, color: muted, size: 20),
+        )
         else const Icon(Icons.north_east_rounded, color: muted, size: 19),
       ]),
       const SizedBox(height: 22), Text(item['nombre'], maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600, letterSpacing: -.3)),

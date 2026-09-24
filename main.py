@@ -182,6 +182,9 @@ class AreaRegistro(Entrada):
     id_empresa: int = Field(gt=0)
     nombre:     str = Field(min_length=1, max_length=100)
 
+class AreaEdicion(Entrada):
+    nombre: str = Field(min_length=1, max_length=100)
+
 class ConfiguracionMaquina(Entrada):
     nombre:      str = Field(min_length=1, max_length=100)
     id_area:     int
@@ -1134,6 +1137,52 @@ def crear_area(datos: AreaRegistro, user=Depends(require_editor)):
         conexion.close()
 
 
+@app.put("/api/areas/{id_area}")
+def actualizar_area(id_area: int, datos: AreaEdicion, user=Depends(require_editor)):
+    check_area(user, id_area)
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("UPDATE Area SET nombre=%s WHERE id_area=%s", (datos.nombre, id_area))
+        conexion.commit()
+        return {"id_area": id_area, "nombre": datos.nombre, "status": "Área actualizada"}
+    except HTTPException:
+        conexion.rollback()
+        raise
+    except Exception:
+        conexion.rollback()
+        raise HTTPException(500, "Error interno del servidor")
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+@app.delete("/api/areas/{id_area}")
+def eliminar_area(id_area: int, user=Depends(require_editor)):
+    check_area(user, id_area)
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("SELECT id_area FROM Area WHERE id_area=%s FOR UPDATE", (id_area,))
+        if not cursor.fetchone():
+            raise HTTPException(404, "Área no encontrada")
+        cursor.execute("SELECT COUNT(*) FROM Maquina WHERE id_area=%s", (id_area,))
+        if cursor.fetchone()[0] > 0:
+            raise HTTPException(409, "Mueve las máquinas a otra área antes de eliminarla")
+        cursor.execute("DELETE FROM Area WHERE id_area=%s", (id_area,))
+        conexion.commit()
+        return {"status": "Área eliminada"}
+    except HTTPException:
+        conexion.rollback()
+        raise
+    except Exception:
+        conexion.rollback()
+        raise HTTPException(500, "Error interno del servidor")
+    finally:
+        cursor.close()
+        conexion.close()
+
+
 @app.post("/api/maquinas")
 def registrar_maquina(datos: MaquinaRegistro, user=Depends(require_editor)):
     check_area(user, datos.id_area)
@@ -1157,6 +1206,32 @@ def registrar_maquina(datos: MaquinaRegistro, user=Depends(require_editor)):
     except Exception as e:
         conexion.rollback()
         raise HTTPException(status_code=500, detail="Error interno del servidor")
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+@app.delete("/api/maquinas/{id_maquina}")
+def eliminar_maquina(id_maquina: str, user=Depends(require_editor)):
+    check_machine(user, id_maquina)
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("DELETE FROM Maquina WHERE id_maquina=%s", (id_maquina,))
+        if cursor.rowcount != 1:
+            raise HTTPException(404, "Máquina no encontrada")
+        conexion.commit()
+        model_store.rul_models.pop(id_maquina, None)
+        model_store.clf_models.pop(id_maquina, None)
+        model_store.if_models.pop(id_maquina, None)
+        model_store.ultima_alerta_preventiva.pop(id_maquina, None)
+        return {"status": "Máquina eliminada"}
+    except HTTPException:
+        conexion.rollback()
+        raise
+    except Exception:
+        conexion.rollback()
+        raise HTTPException(500, "Error interno del servidor")
     finally:
         cursor.close()
         conexion.close()

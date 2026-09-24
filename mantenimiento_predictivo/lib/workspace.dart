@@ -35,6 +35,11 @@ class _WorkspaceState extends State<Workspace> {
   final Map<int, List<dynamic>> treeMachines = {};
   final Set<int> expandedTreeAreas = {};
   final Set<String> updatingTreeMachines = {};
+  int? alertsAreaId;
+  int lastAreaAlertId = 0;
+  bool areaAlertsInitialized = false;
+  bool pollingAreaAlerts = false;
+  String? activeMachineId;
   bool get installer => widget.user['rol'] == 'instalador';
   bool get canEdit => widget.user['rol'] != 'participante';
   int get level => company == null ? 0 : area == null ? 1 : 2;
@@ -47,7 +52,12 @@ class _WorkspaceState extends State<Workspace> {
     if (!installer) company = {'id_empresa': widget.user['id_empresa'], 'nombre': widget.user['empresa_nombre']};
     load();
     if (company != null) loadTreeAreas();
-    timer = Timer.periodic(const Duration(seconds: 8), (_) { if (level == 2 && !loading) load(silent: true); });
+    timer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (level == 2 && !loading) {
+        load(silent: true);
+        pollAreaAlerts();
+      }
+    });
   }
   @override
   void dispose() { timer?.cancel(); search.dispose(); super.dispose(); }
@@ -67,21 +77,89 @@ class _WorkspaceState extends State<Workspace> {
 
   void navigate(int target, [Map<String, dynamic>? value]) {
     setState(() {
+      activeMachineId = null;
       if (target == 0) {
         company = null; area = null; treeAreas = []; treeMachines.clear(); expandedTreeAreas.clear();
+        resetAreaAlerts();
       }
       if (target == 1) {
         final previousCompany = company?['id_empresa'];
         company = value ?? company; area = null;
+        resetAreaAlerts();
         if (previousCompany != company?['id_empresa']) {
           treeAreas = []; treeMachines.clear(); expandedTreeAreas.clear();
         }
       }
-      if (target == 2) area = value;
+      if (target == 2) {
+        final nextAreaId = value?['id_area'] as int?;
+        if (area?['id_area'] != nextAreaId) resetAreaAlerts(nextAreaId);
+        area = value;
+      }
       items = []; query = ''; search.clear();
     });
     load();
     if (target == 1 && company != null) loadTreeAreas();
+    if (target == 2) pollAreaAlerts();
+  }
+
+  void resetAreaAlerts([int? areaId]) {
+    alertsAreaId = areaId;
+    lastAreaAlertId = 0;
+    areaAlertsInitialized = false;
+  }
+
+  Future<void> pollAreaAlerts() async {
+    final selectedAreaId = area?['id_area'];
+    if (selectedAreaId is! int || pollingAreaAlerts) return;
+    if (alertsAreaId != selectedAreaId) resetAreaAlerts(selectedAreaId);
+    pollingAreaAlerts = true;
+    try {
+      final result = await Api.request('/api/areas/$selectedAreaId/alertas?after_id=$lastAreaAlertId') as List;
+      if (!mounted || area?['id_area'] != selectedAreaId) return;
+      if (result.isEmpty) {
+        areaAlertsInitialized = true;
+        return;
+      }
+      final alerts = result.map((item) => Map<String, dynamic>.from(item)).toList();
+      final newestId = alerts.map((item) => (item['id_alerta'] as num).toInt()).reduce((a, b) => a > b ? a : b);
+      if (!areaAlertsInitialized) {
+        lastAreaAlertId = newestId;
+        areaAlertsInitialized = true;
+        return;
+      }
+      lastAreaAlertId = newestId;
+      for (final alert in alerts) {
+        showAreaAlert(alert);
+      }
+    } catch (_) {
+      // La actualización general del área ya comunica problemas de conexión.
+    } finally {
+      pollingAreaAlerts = false;
+    }
+  }
+
+  void showAreaAlert(Map<String, dynamic> alert) {
+    final type = alert['tipo']?.toString() ?? 'predictivo';
+    final color = type == 'critico' ? Colors.red.shade800
+      : type == 'evento' ? Colors.deepPurple.shade700 : Colors.orange.shade800;
+    final machineId = alert['id_maquina'].toString();
+    final machineName = alert['maquina_nombre']?.toString() ?? machineId;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      backgroundColor: color, behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 5),
+      showCloseIcon: true, closeIconColor: Colors.white,
+      content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text('${type.toUpperCase()} · $machineName ($machineId)', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        const SizedBox(height: 3),
+        Text(alert['diagnostico']?.toString() ?? 'Se detectó una alerta.', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white)),
+      ]),
+      action: SnackBarAction(
+        label: 'VER MÁQUINA', textColor: Colors.white,
+        onPressed: () => openTreeMachine({'id_maquina': machineId, 'nombre': machineName}),
+      ),
+    ));
   }
 
   Future<void> loadTreeAreas() async {
@@ -128,9 +206,7 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   void openTreeMachine(Map<String, dynamic> machine) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => PantallaMonitoreo(idMaquina: machine['id_maquina'].toString()),
-    )).then((_) { if (mounted) load(silent: true); });
+    setState(() => activeMachineId = machine['id_maquina'].toString());
   }
 
   Future<void> updateTreeMachine(Map<String, dynamic> machine, {
@@ -364,7 +440,7 @@ class _WorkspaceState extends State<Workspace> {
     final sensors = sensorLabels.keys.where((k) => item['medir_$k'] == 1 || item['medir_$k'] == true).length;
     void open() {
       if (isMachine) {
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => PantallaMonitoreo(idMaquina: item['id_maquina']))).then((_) { if (mounted) load(silent: true); });
+        openTreeMachine(item);
       } else { navigate(level + 1, item); }
     }
     return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: open, hoverColor: accent.withValues(alpha: .025), child: Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -393,7 +469,7 @@ class _WorkspaceState extends State<Workspace> {
       drawer: wide ? null : Drawer(child: SafeArea(child: sidebar())),
       body: SafeArea(child: Row(children: [
         if (wide) sidebar(),
-        Expanded(child: Column(children: [
+        Expanded(child: activeMachineId == null ? Column(children: [
           Container(height: 76, padding: EdgeInsets.symmetric(horizontal: wide ? 36 : 16), decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: line))),
             child: Row(children: [if (!wide) Builder(builder: (c) => IconButton(tooltip: 'Abrir navegación', onPressed: () => Scaffold.of(c).openDrawer(), icon: const Icon(Icons.menu_rounded))),
               Expanded(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
@@ -443,7 +519,11 @@ class _WorkspaceState extends State<Workspace> {
             const SizedBox(height: 28),
             if (level == 2) const Text('La señal se actualiza cada 8 segundos. Después de 30 segundos sin lecturas, la máquina se muestra sin señal reciente.', style: TextStyle(color: muted, fontSize: 12)),
           ]))),
-        ])),
+        ]) : PantallaMonitoreo(
+          key: ValueKey(activeMachineId),
+          idMaquina: activeMachineId!,
+          onBack: () => setState(() => activeMachineId = null),
+        )),
       ])),
     );
   }

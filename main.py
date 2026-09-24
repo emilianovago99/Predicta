@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import Optional, Literal
-from fastapi import FastAPI, HTTPException, Depends, Response
+from fastapi import FastAPI, HTTPException, Depends, Response, Query
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from database import conectar_db
@@ -1060,6 +1060,33 @@ def obtener_maquinas_area(id_area: int, user=Depends(get_current_user)):
         )
         return cursor.fetchall()
     except Exception as e:
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+    finally:
+        cursor.close()
+        conexion.close()
+
+
+@app.get("/api/areas/{id_area}/alertas")
+def obtener_alertas_area(
+    id_area: int,
+    after_id: int = Query(default=0, ge=0),
+    user=Depends(get_current_user),
+):
+    check_area(user, id_area)
+    conexion = conectar_db()
+    cursor = conexion.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """SELECT al.id_alerta, al.id_maquina, m.nombre AS maquina_nombre,
+                      al.riesgo, al.diagnostico, al.tipo, al.fecha
+               FROM Alertas al
+               JOIN Maquina m ON m.id_maquina = al.id_maquina
+               WHERE m.id_area = %s AND al.id_alerta > %s
+               ORDER BY al.id_alerta ASC LIMIT 50""",
+            (id_area, after_id),
+        )
+        return cursor.fetchall()
+    except Exception:
         raise HTTPException(status_code=500, detail="Error interno del servidor")
     finally:
         cursor.close()

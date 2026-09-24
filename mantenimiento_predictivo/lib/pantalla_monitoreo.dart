@@ -14,8 +14,9 @@ class PuntoGrafica {
 
 class PantallaMonitoreo extends StatefulWidget {
   final String idMaquina;
+  final VoidCallback? onBack;
 
-  const PantallaMonitoreo({super.key, required this.idMaquina});
+  const PantallaMonitoreo({super.key, required this.idMaquina, this.onBack});
 
   @override
   State<PantallaMonitoreo> createState() => _PantallaMonitoreoState();
@@ -701,7 +702,7 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
             Text(nombre, style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 8),
             Text(
-              'ID $widget.idMaquina · $_sensoresActivos sensores habilitados',
+              'ID ${widget.idMaquina} · $_sensoresActivos sensores habilitados',
               style: const TextStyle(color: muted, fontSize: 13),
             ),
           ],
@@ -1173,7 +1174,12 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
   Widget build(BuildContext context) {
     if (!_loaded || histTemp.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: Text('Monitoreo · ${widget.idMaquina}')),
+        appBar: AppBar(
+          leading: widget.onBack == null ? null : IconButton(
+            tooltip: 'Volver al área', icon: const Icon(Icons.arrow_back_rounded), onPressed: widget.onBack,
+          ),
+          title: Text('Monitoreo · ${widget.idMaquina}'),
+        ),
         body: !_loaded ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
           : EmptyState(title: _error != null ? 'No pudimos cargar las lecturas' : 'Esperando la primera señal',
               subtitle: _error ?? 'La máquina está registrada. Conecta el dispositivo y envía sus lecturas con el ID ${widget.idMaquina}.',
@@ -1204,6 +1210,9 @@ class _PantallaMonitoreoState extends State<PantallaMonitoreo> {
     return Scaffold(
       backgroundColor: canvas,
       appBar: AppBar(
+        leading: widget.onBack == null ? null : IconButton(
+          tooltip: 'Volver al área', icon: const Icon(Icons.arrow_back_rounded), onPressed: widget.onBack,
+        ),
         title: Text(nombre),
         actions: [Padding(padding: const EdgeInsets.only(right: 18), child: StatusPill(
           _error != null ? 'Sin conexión' : _stale ? 'Sin señal reciente' : 'Señal reciente',

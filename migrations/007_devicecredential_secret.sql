@@ -1,0 +1,1 @@
+ALTER TABLE DeviceCredential ADD COLUMN IF NOT EXISTS key_encrypted TEXT NULL;

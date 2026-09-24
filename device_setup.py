@@ -138,9 +138,14 @@ def installation_status(id_maquina: str, user=Depends(require_installer)):
         c.execute('SELECT firmware_version,received_at,boot_id,TIMESTAMPDIFF(SECOND,received_at,UTC_TIMESTAMP()) AS age_seconds '
                   'FROM SensorData WHERE id_maquina=%s ORDER BY id_data DESC LIMIT 1', (id_maquina,))
         last = c.fetchone()
-        c.execute('SELECT id_maquina FROM DeviceCredential WHERE id_maquina=%s', (id_maquina,))
-        return {'maquina_id': id_maquina, 'provisioned': c.fetchone() is not None,
+        c.execute('SELECT id_maquina,key_encrypted FROM DeviceCredential WHERE id_maquina=%s', (id_maquina,))
+        credential = c.fetchone()
+        device_api_key = None
+        if credential and credential.get('key_encrypted'):
+            device_api_key = cipher().decrypt(credential['key_encrypted'].encode()).decode()
+        return {'maquina_id': id_maquina, 'provisioned': credential is not None,
                 'server_url': os.getenv('DEVICE_SERVER_URL', ''), 'last_reading': last,
+                'device_api_key': device_api_key,
                 'connected': last is not None and last['age_seconds'] <= 30}
     finally:
         c.close()

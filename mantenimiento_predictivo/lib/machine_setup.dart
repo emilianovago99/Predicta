@@ -13,7 +13,7 @@ class MachineSetup extends StatefulWidget {
 }
 
 class _MachineSetupState extends State<MachineSetup> {
-  Map<String, dynamic>? notifications, installation, enrollment;
+  Map<String, dynamic>? notifications, installation, enrollment, deviceKey;
   final server = TextEditingController();
   final name = TextEditingController(), token = TextEditingController(), chat = TextEditingController();
   int? channelId;
@@ -41,6 +41,7 @@ class _MachineSetupState extends State<MachineSetup> {
       notifications = n; installation = i; channelId = n['channel_id'];
       cooldown = ((n['cooldown_seconds'] as num) / 60).round();
       if (server.text.isEmpty) server.text = i?['server_url'] ?? '';
+      deviceKey = i?['device_api_key'] == null ? deviceKey : {'device_api_key': i!['device_api_key']};
     });
   });
   Future<void> save() => run(() async {
@@ -68,6 +69,19 @@ class _MachineSetupState extends State<MachineSetup> {
     await run(() async {
       final result = Map<String, dynamic>.from(await Api.request('$base/installation', body: {'server_url': server.text.trim()}));
       if (mounted) setState(() => enrollment = result);
+    });
+  }
+  Future<void> rotateDeviceKey() async {
+    final yes = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Generar nueva clave de dispositivo'),
+      content: const Text('La clave anterior dejará de funcionar en cuanto generes la nueva. Solo muéstrala a quien cargará el ESP32.'),
+      actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generar clave'))],
+    ));
+    if (yes != true) return;
+    await run(() async {
+      final result = Map<String, dynamic>.from(await Api.request('$base/device-key', body: {}));
+      if (mounted) setState(() => deviceKey = result);
     });
   }
   @override
@@ -122,6 +136,20 @@ class _MachineSetupState extends State<MachineSetup> {
         TextField(controller: server, decoration: const InputDecoration(labelText: 'Dirección del servidor', hintText: 'http://predicta.planta:8088', helperText: 'El nombre debe resolver en la red del sensor. No uses localhost.', helperMaxLines: 2)),
         const SizedBox(height: 12), const Text('El sensor usa DHCP. Su identidad es el ID de máquina y su clave, no su IP.', style: TextStyle(fontSize: 12, color: muted)),
         const SizedBox(height: 12),
+        OutlinedButton.icon(onPressed: busy ? null : rotateDeviceKey, icon: const Icon(Icons.vpn_key_outlined), label: Text(deviceKey == null ? 'Generar clave de dispositivo' : 'Regenerar clave de dispositivo')),
+        if (deviceKey != null) ...[
+          const SizedBox(height: 12),
+          const Text('Clave privada actual', style: TextStyle(fontWeight: FontWeight.w600)),
+          SelectableText(deviceKey!['device_api_key']?.toString() ?? ''),
+          TextButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: deviceKey!['device_api_key']?.toString() ?? ''));
+              if (mounted) setState(() => notice = 'Clave copiada. No la compartas públicamente.');
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copiar clave'),
+          ),
+        ],
         OutlinedButton.icon(onPressed: busy ? null : generate, icon: const Icon(Icons.link), label: const Text('Generar código de instalación')),
         if (enrollment != null) ...[
           const SizedBox(height: 12), const Text('Código privado · un solo uso · vence en 10 minutos', style: TextStyle(fontWeight: FontWeight.w600)),

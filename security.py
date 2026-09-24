@@ -128,9 +128,12 @@ def rotate_device_key(machine_id):
     db = conectar_db()
     cur = db.cursor()
     try:
-        cur.execute('INSERT INTO DeviceCredential (id_maquina, key_hash) VALUES (%s,%s) '
-                    'ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash), rotated_at=CURRENT_TIMESTAMP',
-                    (machine_id, hashlib.sha256(key.encode()).hexdigest()))
+        from notifications import cipher
+
+        encrypted_key = cipher().encrypt(key.encode()).decode()
+        cur.execute('INSERT INTO DeviceCredential (id_maquina, key_hash, key_encrypted) VALUES (%s,%s,%s) '
+                    'ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash), key_encrypted=VALUES(key_encrypted), rotated_at=CURRENT_TIMESTAMP',
+                    (machine_id, hashlib.sha256(key.encode()).hexdigest(), encrypted_key))
         db.commit()
         return key
     finally:

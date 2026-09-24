@@ -55,6 +55,15 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build web --release --no-web-resources-cdn --pwa-strategy=none
+      - name: Build Android APK
+        run: >
+          flutter build apk --release
+          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: predicta-android
+          path: mantenimiento_predictivo/build/app/outputs/flutter-apk/app-release.apk
   integration:
     runs-on: ubuntu-latest
     steps:

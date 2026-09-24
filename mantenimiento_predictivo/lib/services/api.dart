@@ -31,13 +31,14 @@ class ApiClient {
     this.timeout = const Duration(seconds: 40)})
       : client = client ?? createHttpClient(), resolve = resolve ?? ApiConfig.uri;
 
-  Future<dynamic> request(String path, {Map<String, dynamic>? body, bool put = false}) async {
+  Future<dynamic> request(String path, {Map<String, dynamic>? body, bool put = false, bool delete = false}) async {
     try {
       final sentToken = token;
       final headers = {'Content-Type': 'application/json',
         if (sentToken != null) 'Authorization': 'Bearer $sentToken'};
       final uri = resolve(path);
-      final response = await (body == null ? client.get(uri, headers: headers)
+      final response = await (delete ? client.delete(uri, headers: headers)
+          : body == null ? client.get(uri, headers: headers)
           : put ? client.put(uri, headers: headers, body: jsonEncode(body))
           : client.post(uri, headers: headers, body: jsonEncode(body))).timeout(timeout);
       if (response.statusCode == 401) {
@@ -83,6 +84,6 @@ class Api {
     client.token = null;
     await client.clearStoredToken?.call();
   }
-  static Future<dynamic> request(String path, {Map<String, dynamic>? body, bool put = false}) =>
-    client.request(path, body: body, put: put);
+  static Future<dynamic> request(String path, {Map<String, dynamic>? body, bool put = false, bool delete = false}) =>
+    client.request(path, body: body, put: put, delete: delete);
 }

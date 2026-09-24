@@ -1,4 +1,5 @@
 name: CI
+
 on:
   push:
   pull_request:
@@ -8,8 +9,10 @@ on:
         description: Deploy to the configured Ubuntu VM after all checks pass
         type: boolean
         default: false
+
 permissions:
   contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -17,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt ruff
       - run: ruff check --select E9,F63,F7,F82 main.py settings.py database.py security.py migrate.py admin.py notifications.py device_setup.py tests examples
@@ -28,7 +31,8 @@ jobs:
           export DB_PASSWORD=$(openssl rand -hex 32)
           export DB_ROOT_PASSWORD=$(openssl rand -hex 32)
           export JWT_SECRET=$(openssl rand -hex 32)
-          export DOMAIN=example.com ACME_EMAIL=ci@example.com
+          export DOMAIN=example.com
+          export ACME_EMAIL=ci@example.com
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.prod.yml config --quiet
           docker compose -f docker-compose.prod.yml config --format json > /tmp/compose.json
@@ -40,6 +44,7 @@ jobs:
           assert {p['target'] for p in services['caddy']['ports']} == {80, 443}
           PY
           docker run --rm -e DOMAIN -e ACME_EMAIL -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
   flutter:
     runs-on: ubuntu-latest
     defaults:
@@ -49,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.3'
+          flutter-version: "3.38.3"
           cache: true
       - run: flutter pub get --enforce-lockfile
       - run: flutter analyze
@@ -57,21 +62,30 @@ jobs:
       - run: flutter build web --release --no-web-resources-cdn --pwa-strategy=none
       - name: Build Android APK
         run: >
-          flutter build apk --release
-          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+          flutter build apk --release --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: predicta-android
           path: mantenimiento_predictivo/build/app/outputs/flutter-apk/app-release.apk
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Predicta Android Latest
+          files: mantenimiento_predictivo/build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - run: python tests/run_stack.py
+
   deploy:
     needs: [backend, flutter, integration]
     if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'

@@ -261,6 +261,13 @@ no PowerShell ni el prototipo `script.sh` (que, pese a su nombre, contiene Pytho
 
 ## CI/CD y actualización
 
+Para la instancia Oracle actual (`isthisabank.tech`), seguir el
+[procedimiento de actualización desde main](../docs/ORACLE_PRODUCTION.md#actualizar-cuando-haya-cambios-en-main):
+`sudo bash /opt/predicta/current/scripts/update_oracle.sh` desde SSH. Este flujo
+reutiliza los secretos de la VM y no necesita configurar GitHub Actions Secrets.
+Las instrucciones de CI/CD que siguen son una alternativa aún no configurada en
+esa instancia; hacer push a main no despliega automáticamente.
+
 CI valida Python/tests, lint de errores, sintaxis Bash, Compose, Caddy, flutter
 analyze/test/build web y un stack de integración aislado MariaDB/API/Nginx.
 El deploy solo se invoca desde CI después de que todos los jobs pasen, manualmente

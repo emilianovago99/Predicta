@@ -22,7 +22,7 @@ jobs:
       - run: pip install -r requirements.txt ruff
       - run: ruff check --select E9,F63,F7,F82 main.py settings.py database.py security.py migrate.py admin.py notifications.py device_setup.py tests examples
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
-      - run: bash -n scripts/backup_db.sh scripts/restore_db.sh
+      - run: for script in scripts/*.sh; do bash -n "$script"; done
       - name: Validate production exposure and configuration
         run: |
           export DB_PASSWORD=$(openssl rand -hex 32)

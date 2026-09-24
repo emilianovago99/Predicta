@@ -78,7 +78,19 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 ```
 
 No mezclar los dos Compose. No borrar volúmenes ni ejecutar init.sql sobre datos
-existentes. No hay despliegue real ejecutado como parte de estos cambios.
+existentes. El despliegue activo en Oracle Cloud utiliza
+[isthisabank.tech](https://isthisabank.tech); consultar su
+[configuración y operación](docs/ORACLE_PRODUCTION.md).
+
+Para actualizar esa instancia con los cambios de `main`, después de que CI pase,
+conectarse por SSH y ejecutar:
+
+```bash
+sudo bash /opt/predicta/current/scripts/update_oracle.sh
+```
+
+El script compila, respalda la base y verifica HTTPS. Hacer push por sí solo no
+despliega. Ver el [paso a paso y diagnóstico](docs/ORACLE_PRODUCTION.md#actualizar-cuando-haya-cambios-en-main).
 
 ## Guías y validación
 

@@ -35,7 +35,7 @@ class NotificationTests(unittest.TestCase):
         c = MagicMock()
         c.fetchone.return_value = dict(severity=1, emitted_at=datetime.utcnow(), episode='a'*32, occurrences=3, normal_count=0)
         record_incident(c, 'M', dict(severity=2, tipo='critico', title='Critical', action='Review', metrics=[]))
-        self.assertEqual(c.execute.call_count, 3)
+        self.assertEqual(c.execute.call_count, 4)
         self.assertIn('INSERT INTO Alertas', c.execute.call_args.args[0])
 
     def test_recovery_requires_three_readings(self):
@@ -48,7 +48,25 @@ class NotificationTests(unittest.TestCase):
         c.reset_mock()
         c.fetchone.return_value = {**old, 'normal_count': 2}
         record_incident(c, 'M', payload)
-        self.assertTrue(c.execute.call_args.args[1][-1])
+        inserts = [call for call in c.execute.call_args_list if 'INSERT INTO MachineAlert' in call.args[0]]
+        self.assertTrue(inserts[0].args[1][-1])
+
+    def test_recovery_keeps_unsent_critical_snapshot(self):
+        c = MagicMock()
+        critical = dict(severity=2, title='Critical', action='Review', metrics=[], fecha='2026-09-23T00:00:00Z')
+        c.fetchone.return_value = dict(severity=2, emitted_at=datetime.utcnow(), episode='a'*32,
+                                      occurrences=1, normal_count=2,
+                                      pending_payload=json.dumps(critical), pending_revision='old')
+        recovered = dict(severity=0, tipo='recuperado', title='Recovered', action='Monitor', metrics=[])
+        record_incident(c, 'M', recovered)
+        snapshot, revision, machine = c.execute.call_args.args[1]
+        self.assertEqual(json.loads(snapshot), critical)
+        self.assertNotEqual(revision, 'old')
+        text = telegram_text([dict(nombre='Motor', id_maquina=machine, pending_payload=snapshot,
+                                   payload=json.dumps(recovered))])
+        self.assertIn('🔴', text)
+        self.assertIn('Estado actual: 🟢 En rango', text)
+        self.assertIn('revisa la causa', text)
 
     def test_enrollment_url_validation(self):
         for url in ('http://localhost:8088', 'http://127.0.0.1:8000', 'http://u:p@host', 'https://host/api'):

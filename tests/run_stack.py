@@ -52,7 +52,7 @@ print('OK: legacy users and telemetry preserved by migrations')
         run('exec', '-T', 'api', 'python', '-', input=verify.encode())
         # Re-run migrations twice to verify checksums and restart safety on populated data.
         run('exec', '-T', 'api', 'python', 'migrate.py')
-        run('exec', '-T', 'api', 'python', '-m', 'unittest', 'discover', '-s', '/tests', '-p', 'test_*.py', '-v')
+        run('exec', '-T', '-e', 'PREDICTA_DB_INTEGRATION=true', 'api', 'python', '-m', 'unittest', 'discover', '-s', '/tests', '-p', 'test_*.py', '-v')
         run('exec', '-T', 'api', 'python', 'migrate.py')
         subprocess.run([sys.executable, 'tests/smoke.py'], env=dict(env, TEST_EMAIL='ci@example.com', TEST_PASSWORD=password), check=True)
         run('up', '-d', '--no-deps', '--force-recreate', '--wait', 'api')

@@ -128,6 +128,9 @@ a Telegram. Se conserva el chat de IA como consulta voluntaria.
 
 - Un incidente agrupa repeticiones por máquina. Se recuerda cada 15 minutos
   por defecto (configurable desde 5 minutos).
+- El aviso pendiente conserva la mayor gravedad detectada hasta entregarse.
+  Si vuelve a verde antes del envío, el resumen muestra la alerta naranja/roja
+  y «Estado actual: 🟢 En rango»; la recuperación no borra el incidente pendiente.
 - Una subida a crítico queda pendiente sin esperar ese recordatorio. La entrega
   respeta el límite del destino: hasta un resumen por minuto, cinco máquinas por
   mensaje, prioridad a incidentes críticos.

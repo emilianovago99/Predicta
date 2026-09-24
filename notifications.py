@@ -80,6 +80,14 @@ def record_incident(cursor, machine_id, payload, cooldown=900):
     occurrences = 1 if new_episode else previous['occurrences'] + 1
     payload = {**payload, 'episode': episode, 'occurrences': occurrences,
                'fecha': now.isoformat() + 'Z', 'active': severity > 0}
+    pending_payload = (previous or {}).get('pending_payload')
+    pending_revision = (previous or {}).get('pending_revision')
+    if emit:
+        # A recovery/downgrade must not replace an unsent warning or critical event.
+        # A new revision also protects events that arrive during Telegram's HTTP call.
+        if not pending_payload or severity >= json.loads(pending_payload)['severity']:
+            pending_payload = json.dumps(payload)
+        pending_revision = uuid.uuid4().hex
     cursor.execute('INSERT INTO MachineAlert (id_maquina,episode,severity,kind,payload,occurrences,normal_count,updated_at,emitted_at,pending) '
                    'VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,%s) ON DUPLICATE KEY UPDATE '
                    'episode=VALUES(episode),severity=VALUES(severity),kind=VALUES(kind),payload=VALUES(payload),'
@@ -87,6 +95,9 @@ def record_incident(cursor, machine_id, payload, cooldown=900):
                    'emitted_at=VALUES(emitted_at),pending=(pending OR VALUES(pending))',
                    (machine_id, episode, severity, payload['tipo'], json.dumps(payload), occurrences, now,
                     now if emit else previous['emitted_at'], emit))
+    if emit:
+        cursor.execute('UPDATE MachineAlert SET pending_payload=%s,pending_revision=%s WHERE id_maquina=%s',
+                       (pending_payload, pending_revision, machine_id))
     if emit and severity:
         cursor.execute('INSERT INTO Alertas (id_maquina,riesgo,diagnostico,tipo) VALUES (%s,%s,%s,%s)',
                        (machine_id, 95 if severity == 2 else 60,
@@ -94,16 +105,26 @@ def record_incident(cursor, machine_id, payload, cooldown=900):
                         payload['tipo'] if payload['tipo'] != 'umbral' else 'predictivo'))
 
 
+def delivery_payload(row):
+    return json.loads(row.get('pending_payload') or row['payload'])
+
+
 def telegram_text(rows):
     blocks = []
     for row in rows:
-        p = json.loads(row['payload'])
+        p = delivery_payload(row)
+        current = json.loads(row['payload'])
         icon = '🔴' if p['severity'] == 2 else '🟠' if p['severity'] else '🟢'
         lines = [f"{icon} <b>{html.escape(row['nombre'])}</b> · {html.escape(row['id_maquina'])}",
                  html.escape(p['title'])]
         for m in p['metrics']:
             lines.append(html.escape(f"{m['label']}: {m['value']:g} {m['unit']} · límite {m['limit']:g}"))
-        lines.append(html.escape(p['action']))
+        if current['severity'] != p['severity']:
+            state = {0: '🟢 En rango', 1: '🟠 Alerta', 2: '🔴 Peligro'}[current['severity']]
+            lines.append('Estado actual: ' + state)
+        action = ('El equipo volvió a rango; revisa la causa del incidente.'
+                  if p['severity'] and not current['severity'] else p['action'])
+        lines.append(html.escape(action))
         lines.append(html.escape(p['fecha'][:19].replace('T', ' ') + ' UTC'))
         blocks.append('\n'.join(lines))
     return '<b>PREDICTA · Estado de equipos</b>\n\n' + '\n\n'.join(blocks)
@@ -133,7 +154,8 @@ def deliver_pending():
                     continue
                 c.execute('SELECT a.*,m.nombre FROM MachineAlert a JOIN Maquina m ON m.id_maquina=a.id_maquina '
                           'JOIN Area ar ON ar.id_area=m.id_area WHERE m.telegram_channel_id=%s AND ar.id_empresa=%s AND a.pending=1 '
-                          'ORDER BY a.severity DESC,a.updated_at LIMIT 5', (channel_id, channel['id_empresa']))
+                          "ORDER BY COALESCE(JSON_EXTRACT(a.pending_payload,'$.severity'),a.severity) DESC,a.emitted_at LIMIT 5",
+                          (channel_id, channel['id_empresa']))
                 rows = c.fetchall()
                 if not rows:
                     continue
@@ -143,7 +165,7 @@ def deliver_pending():
                     token = cipher().decrypt(channel['token_encrypted'].encode()).decode()
                     response = requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
                         json={'chat_id': channel['chat_id'], 'text': telegram_text(rows), 'parse_mode': 'HTML',
-                              'disable_notification': all(r['severity'] < 2 for r in rows)}, timeout=8)
+                              'disable_notification': all(delivery_payload(r)['severity'] < 2 for r in rows)}, timeout=8)
                     result = response.json()
                     success = response.ok and result.get('ok') is True
                     status = 'Entregado' if success else f'Telegram rechazó el envío ({response.status_code})'
@@ -155,8 +177,9 @@ def deliver_pending():
                           (datetime.utcnow() + timedelta(seconds=delay), status, channel_id))
                 if success:
                     for row in rows:
-                        c.execute('UPDATE MachineAlert SET pending=0 WHERE id_maquina=%s AND emitted_at=%s',
-                                  (row['id_maquina'], row['emitted_at']))
+                        c.execute('UPDATE MachineAlert SET pending=0,pending_payload=NULL,pending_revision=NULL '
+                                  'WHERE id_maquina=%s AND pending_revision=%s',
+                                  (row['id_maquina'], row['pending_revision']))
                 db.commit()
             finally:
                 c.execute('SELECT RELEASE_LOCK(%s)', (lock,))
